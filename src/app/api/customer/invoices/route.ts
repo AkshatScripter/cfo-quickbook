@@ -1,30 +1,42 @@
 import { requireRole } from "@/lib/auth";
 import { db } from "@/db";
 import { cfoUsers, cfoQbConnections, cfoQbInvoices } from "@/db/schema";
-import { eq, and, desc } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 
-// GET /api/customer/invoices — invoices for the logged-in Customer
-// Matches by customer name (QB doesn't have email-based customer IDs)
+// GET /api/customer/invoices — invoices for the logged-in customer
+// Uses qbCustomerId (reliable QB ID) instead of name-matching
 export async function GET() {
   try {
     const user = await requireRole("customer");
 
-    // Get the company this customer belongs to
-    if (!user.companyId) return Response.json({ invoices: [], totalOwed: 0 });
+    // Guard: customer must be linked to both a company and a QB customer
+    if (!user.companyId || !user.qbCustomerId) {
+      return Response.json({ invoices: [], totalOwed: 0, notLinked: true });
+    }
 
-    const [company] = await db.select({ id: cfoUsers.id }).from(cfoUsers).where(eq(cfoUsers.id, user.companyId)).limit(1);
-    if (!company) return Response.json({ invoices: [], totalOwed: 0 });
+    const [company] = await db
+      .select({ id: cfoUsers.id })
+      .from(cfoUsers)
+      .where(eq(cfoUsers.id, user.companyId))
+      .limit(1);
+    if (!company) return Response.json({ invoices: [], totalOwed: 0, notLinked: true });
 
-    const [conn] = await db.select().from(cfoQbConnections)
-      .where(and(eq(cfoQbConnections.userId, company.id), eq(cfoQbConnections.isActive, true))).limit(1);
-    if (!conn) return Response.json({ invoices: [], totalOwed: 0 });
+    const [conn] = await db
+      .select()
+      .from(cfoQbConnections)
+      .where(and(eq(cfoQbConnections.userId, company.id), eq(cfoQbConnections.isActive, true)))
+      .limit(1);
+    if (!conn) return Response.json({ invoices: [], totalOwed: 0, notLinked: true });
 
-    // Find invoices that match the customer's name or email
-    const customerName = user.name ?? user.email;
     const invoices = await db
       .select()
       .from(cfoQbInvoices)
-      .where(and(eq(cfoQbInvoices.realmId, conn.realmId), eq(cfoQbInvoices.customerName, customerName)))
+      .where(
+        and(
+          eq(cfoQbInvoices.realmId, conn.realmId),
+          eq(cfoQbInvoices.customerId, user.qbCustomerId)
+        )
+      )
       .orderBy(desc(cfoQbInvoices.txnDate))
       .limit(100);
 
@@ -43,6 +55,7 @@ export async function GET() {
         status: i.status,
       })),
       totalOwed,
+      notLinked: false,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Server error";
