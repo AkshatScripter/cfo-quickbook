@@ -1,9 +1,9 @@
 import { requireRole } from "@/lib/auth";
 import { db } from "@/db";
 import { cfoUsers } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull, or } from "drizzle-orm";
 
-// GET /api/customers — list all customer users belonging to this company
+// GET /api/customers — portal customers for this company + unlinked portal signups
 export async function GET() {
   try {
     const user = await requireRole("company");
@@ -14,10 +14,17 @@ export async function GET() {
         name: cfoUsers.name,
         email: cfoUsers.email,
         isActive: cfoUsers.isActive,
+        companyId: cfoUsers.companyId,
+        qbCustomerId: cfoUsers.qbCustomerId,
         createdAt: cfoUsers.createdAt,
       })
       .from(cfoUsers)
-      .where(eq(cfoUsers.companyId, user.id));
+      .where(
+        and(
+          eq(cfoUsers.role, "customer"),
+          or(eq(cfoUsers.companyId, user.id), isNull(cfoUsers.companyId))
+        )
+      );
 
     return Response.json({ customers });
   } catch (err) {
