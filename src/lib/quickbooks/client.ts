@@ -3,7 +3,13 @@ import { cfoQbTokens, cfoQbConnections } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { refreshAccessToken } from "./oauth";
 
-const QB_BASE = "https://sandbox-quickbooks.api.intuit.com/v3/company";
+// QBO Accounting API minor version. Versions 1–74 were deprecated Aug 1, 2025;
+// requests below 75 are ignored and served as 75.
+const MINOR_VERSION = 75;
+
+// Defaults to sandbox for safety. Production must set QUICKBOOKS_API_BASE to
+// https://quickbooks.api.intuit.com
+const QB_BASE = `${process.env.QUICKBOOKS_API_BASE ?? "https://sandbox-quickbooks.api.intuit.com"}/v3/company`;
 
 // Run a QB Query Language query and return the raw response.
 // Handles token expiry + automatic refresh automatically.
@@ -25,7 +31,7 @@ async function callApi(
   query: string,
   onUnauthorized?: () => Promise<Record<string, unknown>>
 ): Promise<Record<string, unknown>> {
-  const url = `${QB_BASE}/${realmId}/query?query=${encodeURIComponent(query)}&minorversion=65`;
+  const url = `${QB_BASE}/${realmId}/query?query=${encodeURIComponent(query)}&minorversion=${MINOR_VERSION}`;
 
   const res = await fetch(url, {
     headers: {

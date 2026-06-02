@@ -642,12 +642,13 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
 
 # QuickBooks
-NEXT_PUBLIC_QB_CLIENT_ID=your_qb_client_id
-QB_CLIENT_SECRET=your_qb_client_secret
-QB_REDIRECT_URI=http://localhost:3000/api/qb/callback
+QUICKBOOKS_CLIENT_ID=your_qb_client_id
+QUICKBOOKS_CLIENT_SECRET=your_qb_client_secret
+QUICKBOOKS_REDIRECT_URI=http://localhost:3000/api/quickbooks/callback
+QUICKBOOKS_API_BASE=https://sandbox-quickbooks.api.intuit.com  # prod: https://quickbooks.api.intuit.com
 
-# Claude API (Free tier initially)
-CLAUDE_API_KEY=your_claude_api_key
+# AI CFO agent (Groq — not Claude/Anthropic for this project)
+GROQ_API_KEY=your_groq_api_key
 
 # App
 NEXT_PUBLIC_APP_URL=http://localhost:3000

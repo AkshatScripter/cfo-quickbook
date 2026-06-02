@@ -142,9 +142,10 @@ SUPABASE_SERVICE_ROLE_KEY       # Used by admin client (server only)
 DATABASE_URL                    # Postgres connection string for Drizzle
 MIGRATION_DATABASE_URL          # Optional override for drizzle-kit migrations
 SUPER_ADMIN_EMAIL               # Email that always gets super_admin role on first login
-QB_CLIENT_ID                    # Intuit OAuth client ID
-QB_CLIENT_SECRET                # Intuit OAuth client secret
-QB_REDIRECT_URI                 # OAuth callback URL registered with Intuit
+QUICKBOOKS_CLIENT_ID            # Intuit OAuth client ID (server-only)
+QUICKBOOKS_CLIENT_SECRET        # Intuit OAuth client secret
+QUICKBOOKS_REDIRECT_URI         # OAuth callback URL registered with Intuit (/api/quickbooks/callback)
+QUICKBOOKS_API_BASE             # QBO API base; defaults to sandbox, set to https://quickbooks.api.intuit.com in prod
 CRON_SECRET                     # Bearer token required by /api/cron/* routes
 GROQ_API_KEY                    # Groq API key for AI CFO chat + insights
 NEXT_PUBLIC_APP_URL             # App base URL (e.g. http://localhost:3000)

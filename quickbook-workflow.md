@@ -129,13 +129,16 @@ QuickBooks uses standard OAuth 2.0 Authorization Code grant. Our implementation 
 
 ## 4. ⚠️ Known issues in current code (fix before production)
 
-These are concrete mismatches found in the current implementation:
+These are concrete mismatches found in the current implementation.
+
+> **Status (2026-06-02):** #1, #2, #3 have been **fixed** — env vars standardized on `QUICKBOOKS_*` with a committed `.env.example`, `minorversion=75`, and the API base URL is now env-driven via `QUICKBOOKS_API_BASE` (defaults to sandbox). #4–#8 remain open.
+
 
 | # | Issue | Location | Fix |
 |---|---|---|---|
 | 1 | **Env var name mismatch.** `oauth.ts` reads `QUICKBOOKS_CLIENT_ID`, `QUICKBOOKS_CLIENT_SECRET`, `QUICKBOOKS_REDIRECT_URI`, but `CLAUDE.md`/spec use `QB_CLIENT_ID` / `QB_REDIRECT_URI` (and spec also shows `NEXT_PUBLIC_QB_CLIENT_ID`). **OAuth will silently break** if the wrong names are set. | `src/lib/quickbooks/oauth.ts` | Pick one naming convention and align `.env`, code, and docs. Recommend `QUICKBOOKS_*` (matches code). Do **not** make the client ID `NEXT_PUBLIC_` — it is used only server-side. |
 | 2 | **Deprecated minor version.** `client.ts` sends `minorversion=65`. Minor versions 1–74 were **deprecated Aug 1, 2025** and are ignored (server falls back to 75). | `src/lib/quickbooks/client.ts` | Change to `minorversion=75`. |
-| 3 | **Sandbox URL hardcoded.** `QB_BASE` is the sandbox host. Production will hit the wrong server. | `src/lib/quickbooks/client.ts` | Drive base URL from env (e.g. `QB_API_BASE`), sandbox in dev, `quickbooks.api.intuit.com` in prod. |
+| 3 | **Sandbox URL hardcoded.** `QB_BASE` is the sandbox host. Production will hit the wrong server. | `src/lib/quickbooks/client.ts` | Drive base URL from env (`QUICKBOOKS_API_BASE`), sandbox in dev, `quickbooks.api.intuit.com` in prod. |
 | 4 | **No `Customer` sync.** Spec requires syncing customers; we only derive customer names from `CustomerRef` on invoices. | `src/lib/quickbooks/sync.ts` | Add a `syncCustomers` + `cfo_qb_customers` table (see §6). |
 | 5 | **No pagination.** Every sync caps at `MAXRESULTS 1000`. Companies with >1000 invoices silently lose data. | `src/lib/quickbooks/sync.ts` | Loop `STARTPOSITION` (see §5.3). |
 | 6 | **Full delete-then-insert every sync.** Doesn't scale to 100+ companies (spec goal) and burns rate limit. | `src/lib/quickbooks/sync.ts` | Move to **CDC incremental sync** (see §5.4). |
@@ -401,8 +404,8 @@ The spec wants a **Profit & Loss** summary. Two options:
 QUICKBOOKS_CLIENT_ID        # Intuit app client ID (server-only — do NOT prefix NEXT_PUBLIC_)
 QUICKBOOKS_CLIENT_SECRET    # Intuit app client secret
 QUICKBOOKS_REDIRECT_URI     # OAuth callback, must exactly match the portal registration
-QB_API_BASE                 # (recommended) sandbox vs production base URL
-QB_WEBHOOK_VERIFIER_TOKEN   # (when webhooks added) HMAC key for signature verification
+QUICKBOOKS_API_BASE                # sandbox vs production base URL (defaults to sandbox)
+QUICKBOOKS_WEBHOOK_VERIFIER_TOKEN  # (when webhooks added) HMAC key for signature verification
 CRON_SECRET                 # Bearer token guarding POST /api/cron/sync
 ```
 
