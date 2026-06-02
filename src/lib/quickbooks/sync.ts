@@ -8,7 +8,7 @@ import {
   cfoQbConnections,
   cfoActivityLogs,
 } from "@/db/schema";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { qbQuery, qbCdc, cdcRows } from "./client";
 import { runAllCalculations } from "@/lib/calculations";
 
@@ -69,6 +69,60 @@ export async function syncCompany(realmId: string, userId: string) {
     throw error;
   }
 }
+
+// ─── Single-entity sync (used by webhook handler) ────────────────────────────
+
+// QB entity IDs are always numeric strings from Intuit.
+const QB_ID_RE = /^\d+$/;
+
+// Fetch one record from QBO by Id and upsert it into our local table.
+// Called after a webhook notification tells us a specific record changed.
+export async function syncEntityById(
+  realmId: string,
+  userId: string,
+  entityName: string,
+  qbId: string
+): Promise<void> {
+  if (!QB_ID_RE.test(qbId)) throw new Error(`Invalid QB entity id: ${qbId}`);
+
+  const qboEntity = ENTITY_MAP[entityName];
+  if (!qboEntity) return; // entity type we don't track — ignore silently
+
+  const data = (await qbQuery(realmId, userId, `SELECT * FROM ${qboEntity} WHERE Id = '${qbId}'`)) as {
+    QueryResponse?: Record<string, unknown>;
+  };
+  const rows = (data?.QueryResponse?.[qboEntity] ?? []) as unknown[];
+  if (rows.length === 0) return;
+
+  switch (qboEntity) {
+    case "Invoice":  await upsertInvoices(realmId, rows as QBInvoice[]);  break;
+    case "Payment":  await upsertPayments(realmId, rows as QBPayment[]);  break;
+    case "Purchase": await upsertExpenses(realmId, rows as QBPurchase[]); break;
+    case "Account":  await upsertAccounts(realmId, rows as QBAccount[]);  break;
+    case "Customer": await upsertCustomers(realmId, rows as QBCustomer[]); break;
+  }
+}
+
+// Delete one local row when QBO signals a hard-delete on a webhook event.
+export async function deleteEntityById(realmId: string, entityName: string, qbId: string): Promise<void> {
+  if (!QB_ID_RE.test(qbId)) return;
+  switch (ENTITY_MAP[entityName]) {
+    case "Invoice":  await db.delete(cfoQbInvoices).where(and(eq(cfoQbInvoices.realmId, realmId), eq(cfoQbInvoices.qbId, qbId)));   break;
+    case "Payment":  await db.delete(cfoQbPayments).where(and(eq(cfoQbPayments.realmId, realmId), eq(cfoQbPayments.qbId, qbId)));   break;
+    case "Purchase": await db.delete(cfoQbExpenses).where(and(eq(cfoQbExpenses.realmId, realmId), eq(cfoQbExpenses.qbId, qbId)));   break;
+    case "Account":  await db.delete(cfoQbAccounts).where(and(eq(cfoQbAccounts.realmId, realmId), eq(cfoQbAccounts.qbId, qbId)));   break;
+    case "Customer": await db.delete(cfoQbCustomers).where(and(eq(cfoQbCustomers.realmId, realmId), eq(cfoQbCustomers.qbId, qbId))); break;
+  }
+}
+
+// Map webhook entity names → QBO query entity names (webhook uses "Purchase" for expenses)
+const ENTITY_MAP: Record<string, string> = {
+  Invoice:  "Invoice",
+  Payment:  "Payment",
+  Purchase: "Purchase",
+  Account:  "Account",
+  Customer: "Customer",
+};
 
 // ─── Sync mode ───────────────────────────────────────────────────────────────
 

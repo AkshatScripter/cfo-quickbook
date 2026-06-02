@@ -9,6 +9,7 @@ const PUBLIC_PATHS = new Set(["/login", "/signup"]);
 const PUBLIC_API_PREFIXES = [
   "/api/auth",
   "/api/quickbooks/callback", // QB OAuth callback — called by Intuit, no session yet
+  "/api/quickbooks/webhook",  // QB webhook — called by Intuit, verified by HMAC signature
   "/api/cron",                // protected by CRON_SECRET header instead
 ];
 
