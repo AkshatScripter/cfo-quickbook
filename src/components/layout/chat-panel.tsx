@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef } from "react";
 import { I } from "@/components/icons";
 import { useApp } from "@/lib/app-context";
-import { MOCK } from "@/lib/mock";
 
 interface QuickAction {
   id: string;
@@ -37,6 +36,16 @@ interface Message {
   meta: string;
 }
 
+function formatSync(iso: string | null | undefined): string {
+  if (!iso) return "never";
+  const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60_000);
+  if (mins < 1)  return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24)  return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
 function pickResponse(text: string, role: string) {
   const q = text.toLowerCase();
   if (role === "customer") {
@@ -53,7 +62,7 @@ function pickResponse(text: string, role: string) {
 }
 
 export function ChatPanel() {
-  const { role, navigate, closeChat, flashHighlight, pinInsight, pinned, pendingPrompt, clearPendingPrompt } = useApp();
+  const { user, role, navigate, closeChat, flashHighlight, pinInsight, pinned, pendingPrompt, clearPendingPrompt } = useApp();
 
   const [messages, setMessages] = useState<Message[]>(() => [{
     id: "welcome",
@@ -202,7 +211,7 @@ export function ChatPanel() {
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 8, fontSize: 11, color: "var(--fg-4)", fontFamily: "var(--font-mono)" }}>
-          <span>Grounded in QuickBooks · synced {MOCK.company.lastSync}</span>
+          <span>Grounded in QuickBooks · synced {formatSync(user?.lastSyncAt)}</span>
           <span><span className="kbd">↵</span> send</span>
         </div>
       </div>
