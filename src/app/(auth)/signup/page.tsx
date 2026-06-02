@@ -5,7 +5,6 @@ import Link from "next/link";
 import { toast } from "sonner";
 import { I } from "@/components/icons";
 import { Spinner } from "@/components/ui/spinner";
-import { createClient } from "@/lib/supabase/client";
 
 type SignupRole = "company" | "customer";
 
@@ -28,19 +27,15 @@ export default function SignupPage() {
     setLoading(true);
 
     try {
-      const supabase = createClient();
-      const { error: signUpError } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: { name, role },
-          emailRedirectTo: `${globalThis.location.origin}/api/auth/callback`,
-        },
+      const res = await fetch("/api/auth/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password, name, role }),
       });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? "Signup failed");
 
-      if (signUpError) throw new Error(signUpError.message);
-
-      toast.success("Account created — check your email to confirm");
+      toast.success("Account created — you can log in now");
       setDone(true);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Signup failed");
@@ -64,10 +59,10 @@ export default function SignupPage() {
             <div style={{ width: 48, height: 48, borderRadius: "50%", background: "var(--positive-bg)", display: "grid", placeItems: "center", margin: "0 auto 20px" }}>
               <I.Check size={22} style={{ color: "var(--positive)" }} />
             </div>
-            <h1>Check your email</h1>
+            <h1>Account created!</h1>
             <p className="sub">
-              We sent a confirmation link to <strong>{email}</strong>.
-              Click it to activate your account and sign in.
+              Your account for <strong>{email}</strong> is ready.
+              You can log in now.
             </p>
             <Link href="/login" className="btn btn-primary btn-lg btn-block" style={{ marginTop: 24, display: "flex" }}>
               Back to login
