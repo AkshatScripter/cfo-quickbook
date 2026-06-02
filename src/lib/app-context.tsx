@@ -81,7 +81,7 @@ export function AppProvider({ children }: Readonly<{ children: React.ReactNode }
   const [pinned, setPinned] = useState<PinnedInsight[]>([]);
   const [pendingPrompt, setPendingPrompt] = useState<PendingPrompt | null>(null);
 
-  const role: Role = user?.role ?? "company";
+  const role: Role = user?.role ?? "customer";
 
   useEffect(() => {
     // Use dataset instead of setAttribute
