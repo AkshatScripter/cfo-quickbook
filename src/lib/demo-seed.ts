@@ -45,7 +45,7 @@ export async function seedDemoCustomer(
     qbId,
     displayName,
     isActive: true,
-    balance: "12050.00",
+    balance: "11000.00",
   });
 
   // Invoice QB IDs (referenced by payments below)
