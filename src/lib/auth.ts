@@ -1,8 +1,9 @@
-import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 import { db } from "@/db";
 import { cfoUsers } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import type { User } from "@/db/schema";
+import { seedDemoCustomer } from "@/lib/demo-seed";
 
 // Get the current user's profile from cfo_users.
 // If the row doesn't exist yet (first login), create it automatically.
@@ -36,7 +37,20 @@ export async function getUser(): Promise<User | null> {
     })
     .returning();
 
-  return created ?? null;
+  if (!created) return null;
+
+  if (created.role === "customer") {
+    await seedDemoCustomer(created.id, created.name);
+    // Re-fetch to pick up companyId + qbCustomerId written by seed
+    const [seeded] = await db
+      .select()
+      .from(cfoUsers)
+      .where(eq(cfoUsers.id, created.id))
+      .limit(1);
+    return seeded ?? created;
+  }
+
+  return created;
 }
 
 // Require auth — throws if not logged in
@@ -61,7 +75,11 @@ function resolveRole(
   metaRole?: string
 ): "super_admin" | "company" | "customer" {
   if (email && email === process.env.SUPER_ADMIN_EMAIL) return "super_admin";
-  if (metaRole === "super_admin" || metaRole === "company" || metaRole === "customer") {
+  if (
+    metaRole === "super_admin" ||
+    metaRole === "company" ||
+    metaRole === "customer"
+  ) {
     return metaRole;
   }
   return "customer";
