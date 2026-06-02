@@ -5,39 +5,38 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 
 const bodySchema = z.object({
+  companyId: z.string().uuid().nullable(),
   qbCustomerId: z.string().nullable(),
 });
 
-// PATCH /api/customers/:id — company owner assigns or removes a QB customer link
+// PATCH /api/customers/:id — super_admin assigns a portal customer to a company + QB customer
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const user = await requireRole("company");
+    await requireRole("super_admin");
     const { id } = await params;
     const body = bodySchema.parse(await request.json());
 
-    // Verify the target customer exists and belongs to this company (or is unlinked)
     const [target] = await db
-      .select({ companyId: cfoUsers.companyId })
+      .select({ id: cfoUsers.id, role: cfoUsers.role })
       .from(cfoUsers)
       .where(eq(cfoUsers.id, id))
       .limit(1);
 
     if (!target) {
-      return Response.json({ error: "Customer not found" }, { status: 404 });
+      return Response.json({ error: "User not found" }, { status: 404 });
     }
-    if (target.companyId && target.companyId !== user.id) {
-      return Response.json({ error: "Forbidden" }, { status: 403 });
+    if (target.role !== "customer") {
+      return Response.json({ error: "Only customer users can be assigned" }, { status: 400 });
     }
 
     const [updated] = await db
       .update(cfoUsers)
       .set({
+        companyId: body.companyId,
         qbCustomerId: body.qbCustomerId,
-        // Claim the customer for this company if not yet claimed
-        companyId: target.companyId ?? user.id,
         updatedAt: new Date(),
       })
       .where(eq(cfoUsers.id, id))

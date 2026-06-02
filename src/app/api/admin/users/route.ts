@@ -16,6 +16,7 @@ export async function GET() {
         name: cfoUsers.name,
         role: cfoUsers.role,
         companyId: cfoUsers.companyId,
+        qbCustomerId: cfoUsers.qbCustomerId,
         isActive: cfoUsers.isActive,
         createdAt: cfoUsers.createdAt,
       })
