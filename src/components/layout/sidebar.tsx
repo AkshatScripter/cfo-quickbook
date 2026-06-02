@@ -38,13 +38,12 @@ const NAV_BY_ROLE: Record<Role, NavItem[]> = {
   ],
   super_admin: [
     { section: "Platform" },
-    { id: "/admin",          label: "Overview",  icon: "Home"     },
-    { id: "/admin/users",    label: "Users",     icon: "Users"    },
-    { id: "/admin/logs",     label: "AI Logs",   icon: "Activity" },
-    { section: "Tenants" },
-    { id: "/admin",          label: "Companies", icon: "Building" },
+    { id: "/admin",             label: "Overview",  icon: "Home"     },
+    { id: "/admin/users",       label: "Customers", icon: "Users"    },
+    { id: "/admin/companies",   label: "Companies", icon: "Building" },
+    { id: "/admin/logs",        label: "AI Logs",   icon: "Activity" },
     { section: "Settings" },
-    { id: "/admin/settings", label: "Platform",  icon: "Settings" },
+    { id: "/admin/settings",    label: "Platform",  icon: "Settings" },
   ],
 };
 

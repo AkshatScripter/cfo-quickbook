@@ -71,7 +71,8 @@ export default function AdminUsers() {
     }
   }
 
-  const filtered = users.filter(u =>
+  const customers = users.filter(u => u.role === "customer");
+  const filtered = customers.filter(u =>
     !search ||
     u.name?.toLowerCase().includes(search.toLowerCase()) ||
     u.email.toLowerCase().includes(search.toLowerCase())
@@ -83,14 +84,14 @@ export default function AdminUsers() {
     <div className="page">
       <div className="page-head">
         <div>
-          <h1 className="page-title">All users</h1>
-          <p className="page-sub">Every account across the platform</p>
+          <h1 className="page-title">Customers</h1>
+          <p className="page-sub">Portal customer accounts — assign to a company to activate</p>
         </div>
       </div>
 
       <div className="card flush">
         <div className="card-header">
-          <div className="card-title">{users.length} users</div>
+          <div className="card-title">{customers.length} customers</div>
           <div className="search">
             <I.Search size={13} />
             <input
@@ -103,8 +104,7 @@ export default function AdminUsers() {
         <table className="tbl">
           <thead>
             <tr>
-              <th>User</th>
-              <th>Role</th>
+              <th>Customer</th>
               <th>Assigned company</th>
               <th>Status</th>
               <th>Joined</th>
@@ -124,32 +124,23 @@ export default function AdminUsers() {
                   </div>
                 </td>
                 <td>
-                  <span className="badge" style={{ textTransform: "capitalize" }}>
-                    {u.role.replace("_", " ")}
-                  </span>
-                </td>
-                <td>
-                  {u.role === "customer" ? (
-                    <div className="row gap-2" style={{ alignItems: "center" }}>
-                      <select
-                        className="select"
-                        style={{ minWidth: 180 }}
-                        value={u.companyId ?? ""}
-                        disabled={assigning === u.id}
-                        onChange={(e) => assignCompany(u.id, e.target.value)}
-                      >
-                        <option value="">— not assigned —</option>
-                        {companyUsers.map(c => (
-                          <option key={c.id} value={c.id}>
-                            {c.name ?? c.email}
-                          </option>
-                        ))}
-                      </select>
-                      {assigning === u.id && <Spinner size="sm" />}
-                    </div>
-                  ) : (
-                    <span className="muted" style={{ fontSize: 12 }}>—</span>
-                  )}
+                  <div className="row gap-2" style={{ alignItems: "center" }}>
+                    <select
+                      className="select"
+                      style={{ minWidth: 180 }}
+                      value={u.companyId ?? ""}
+                      disabled={assigning === u.id}
+                      onChange={(e) => assignCompany(u.id, e.target.value)}
+                    >
+                      <option value="">— not assigned —</option>
+                      {companyUsers.map(c => (
+                        <option key={c.id} value={c.id}>
+                          {c.name ?? c.email}
+                        </option>
+                      ))}
+                    </select>
+                    {assigning === u.id && <Spinner size="sm" />}
+                  </div>
                 </td>
                 <td>
                   <span className={`badge ${u.isActive ? "b-positive" : "b-negative"}`}>
