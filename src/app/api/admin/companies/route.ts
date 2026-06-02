@@ -1,7 +1,7 @@
 import { requireRole } from "@/lib/auth";
 import { db } from "@/db";
 import { cfoUsers, cfoQbConnections } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 
 // GET /api/admin/companies — all company users with their QB connection status
 export async function GET() {
@@ -17,7 +17,8 @@ export async function GET() {
         createdAt: cfoUsers.createdAt,
       })
       .from(cfoUsers)
-      .where(eq(cfoUsers.role, "company"));
+      .where(eq(cfoUsers.role, "company"))
+      .orderBy(desc(cfoUsers.createdAt));
 
     // Attach QB connection info
     const connections = await db.select().from(cfoQbConnections);
