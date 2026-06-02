@@ -147,6 +147,7 @@ QUICKBOOKS_CLIENT_SECRET        # Intuit OAuth client secret
 QUICKBOOKS_REDIRECT_URI         # OAuth callback URL registered with Intuit (/api/quickbooks/callback)
 QUICKBOOKS_API_BASE             # QBO API base; defaults to sandbox, set to https://quickbooks.api.intuit.com in prod
 QUICKBOOKS_WEBHOOK_VERIFIER_TOKEN # HMAC-SHA256 key for verifying intuit-signature on webhook requests
+QUICKBOOKS_TOKEN_ENC_KEY          # 64-char hex (32 bytes) AES-256-GCM key for encrypting QB tokens at rest
 CRON_SECRET                     # Bearer token required by /api/cron/* routes
 GROQ_API_KEY                    # Groq API key for AI CFO chat + insights
 NEXT_PUBLIC_APP_URL             # App base URL (e.g. http://localhost:3000)

@@ -5,6 +5,7 @@ import { db } from "@/db";
 import { cfoQbTokens, cfoQbConnections, cfoActivityLogs } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { syncCompany } from "@/lib/quickbooks/sync";
+import { encryptToken } from "@/lib/quickbooks/tokens";
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL!;
 
@@ -42,12 +43,15 @@ export async function GET(request: NextRequest) {
       .where(and(eq(cfoQbTokens.userId, userId), eq(cfoQbTokens.realmId, realmId)))
       .limit(1);
 
+    const encryptedAccess = encryptToken(tokens.access_token);
+    const encryptedRefresh = encryptToken(tokens.refresh_token);
+
     if (existingTokens.length > 0) {
       await db
         .update(cfoQbTokens)
         .set({
-          accessToken: tokens.access_token,
-          refreshToken: tokens.refresh_token,
+          accessToken: encryptedAccess,
+          refreshToken: encryptedRefresh,
           expiresAt,
           updatedAt: new Date(),
         })
@@ -56,8 +60,8 @@ export async function GET(request: NextRequest) {
       await db.insert(cfoQbTokens).values({
         userId,
         realmId,
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token,
+        accessToken: encryptedAccess,
+        refreshToken: encryptedRefresh,
         expiresAt,
       });
     }

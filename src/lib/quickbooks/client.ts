@@ -2,6 +2,7 @@ import { db } from "@/db";
 import { cfoQbTokens, cfoQbConnections } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { refreshAccessToken } from "./oauth";
+import { encryptToken, decryptToken } from "./tokens";
 
 // QBO Accounting API minor version. Versions 1–74 were deprecated Aug 1, 2025;
 // requests below 75 are ignored and served as 75.
@@ -102,7 +103,7 @@ async function getValidToken(realmId: string, userId: string): Promise<string> {
     return forceRefreshToken(realmId, userId);
   }
 
-  return token.accessToken;
+  return decryptToken(token.accessToken);
 }
 
 async function forceRefreshToken(realmId: string, userId: string): Promise<string> {
@@ -120,7 +121,12 @@ async function forceRefreshToken(realmId: string, userId: string): Promise<strin
 
     await db
       .update(cfoQbTokens)
-      .set({ accessToken: fresh.access_token, refreshToken: fresh.refresh_token, expiresAt, updatedAt: new Date() })
+      .set({
+        accessToken: encryptToken(fresh.access_token),
+        refreshToken: encryptToken(fresh.refresh_token),
+        expiresAt,
+        updatedAt: new Date(),
+      })
       .where(and(eq(cfoQbTokens.realmId, realmId), eq(cfoQbTokens.userId, userId)));
 
     return fresh.access_token;
