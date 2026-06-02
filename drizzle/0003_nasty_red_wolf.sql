@@ -1,0 +1,1 @@
+ALTER TABLE "cfo_users" ADD COLUMN "qb_customer_id" text;

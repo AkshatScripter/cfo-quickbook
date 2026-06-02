@@ -41,6 +41,8 @@ export const cfoUsers = pgTable("cfo_users", {
   role: userRoleEnum("role").notNull().default("customer"),
   // For customers: the company user who invited them
   companyId: uuid("company_id"),
+  // QB customer ID (qbId from cfo_qb_customers) linking this portal user to a QB customer
+  qbCustomerId: text("qb_customer_id"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
