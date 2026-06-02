@@ -6,6 +6,7 @@ import { z } from "zod";
 
 const bodySchema = z.object({
   companyId: z.string().uuid().nullable(),
+  qbCustomerId: z.string().nullable().optional(), // explicit override; if omitted, auto-match is used
 });
 
 // PATCH /api/customers/:id — super_admin assigns a portal customer to a company.
@@ -33,9 +34,11 @@ export async function PATCH(
       return Response.json({ error: "Only customer users can be assigned" }, { status: 400 });
     }
 
-    // Auto-match QB customer when a company is being assigned
+    // Use explicit override if provided; otherwise auto-match by email/name
     let qbCustomerId: string | null = null;
-    if (body.companyId) {
+    if (body.qbCustomerId !== undefined) {
+      qbCustomerId = body.qbCustomerId;
+    } else if (body.companyId) {
       const [conn] = await db
         .select({ realmId: cfoQbConnections.realmId })
         .from(cfoQbConnections)
@@ -58,7 +61,7 @@ export async function PATCH(
 
         qbCustomerId = byEmail?.qbId ?? byName?.qbId ?? null;
       }
-    }
+    } // else companyId is null → unassigning, qbCustomerId stays null
 
     const [updated] = await db
       .update(cfoUsers)
