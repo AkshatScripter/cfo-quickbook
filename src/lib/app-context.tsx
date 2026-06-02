@@ -21,6 +21,8 @@ export interface AuthUser {
   name: string | null;
   role: Role;
   qbConnected: boolean;
+  companyName: string | null;
+  lastSyncAt: string | null; // ISO 8601 string or null
 }
 
 interface PinnedInsight {
