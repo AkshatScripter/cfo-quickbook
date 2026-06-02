@@ -163,6 +163,23 @@ export const cfoQbAccounts = pgTable("cfo_qb_accounts", {
   syncedAt: timestamp("synced_at").notNull().defaultNow(),
 });
 
+// ─── cfo_qb_customers ─────────────────────────────────────────────────────────
+// Customers synced from QB
+
+export const cfoQbCustomers = pgTable("cfo_qb_customers", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  realmId: text("realm_id").notNull(),
+  qbId: text("qb_id").notNull(),
+  displayName: text("display_name"),
+  email: text("email"),
+  phone: text("phone"),
+  balance: numeric("balance", { precision: 12, scale: 2 }), // open balance owed by this customer
+  billAddr: jsonb("bill_addr"), // billing address object
+  isActive: boolean("is_active").notNull().default(true),
+  rawData: jsonb("raw_data"),
+  syncedAt: timestamp("synced_at").notNull().defaultNow(),
+});
+
 // ─── cfo_calculated_reports ───────────────────────────────────────────────────
 // Cached results of calculated CFO reports (Revenue, Cash Flow, KPI, Risk)
 
@@ -235,6 +252,9 @@ export type NewQbPayment = typeof cfoQbPayments.$inferInsert;
 
 export type QbExpense = typeof cfoQbExpenses.$inferSelect;
 export type NewQbExpense = typeof cfoQbExpenses.$inferInsert;
+
+export type QbCustomer = typeof cfoQbCustomers.$inferSelect;
+export type NewQbCustomer = typeof cfoQbCustomers.$inferInsert;
 
 export type CalculatedReport = typeof cfoCalculatedReports.$inferSelect;
 export type NewCalculatedReport = typeof cfoCalculatedReports.$inferInsert;
