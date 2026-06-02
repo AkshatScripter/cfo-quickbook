@@ -3,7 +3,6 @@
 import { usePathname } from "next/navigation";
 import { I } from "@/components/icons";
 import { useApp } from "@/lib/app-context";
-import { MOCK } from "@/lib/mock";
 
 const ROUTE_LABEL: Record<string, string> = {
   "/":                "Dashboard",
@@ -23,10 +22,13 @@ const ROUTE_LABEL: Record<string, string> = {
 };
 
 export function Topbar() {
-  const { role, chatOpen, openChat } = useApp();
+  const { role, user, chatOpen, openChat } = useApp();
   const pathname = usePathname();
   const here = ROUTE_LABEL[pathname] ?? "—";
-  const tenant = role === "super_admin" ? "Platform" : role === "company" ? MOCK.company.name : "Acme Holdings";
+  const tenant =
+    role === "super_admin" ? "Platform"
+    : role === "company"   ? (user?.companyName ?? user?.name ?? "My Company")
+    : (user?.name ?? "My Account");
 
   return (
     <header className="topbar">
