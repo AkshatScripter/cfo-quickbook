@@ -54,10 +54,11 @@ export default function CustomerPortal() {
           </div>
         </div>
         <div className="empty" style={{ marginTop: 40 }}>
-          <div className="h-title" style={{ marginBottom: 8 }}>Account not linked yet</div>
-          <p className="muted" style={{ maxWidth: 360, textAlign: "center" }}>
-            Your account hasn&apos;t been linked to a company yet.
-            Contact your account manager to get set up.
+          <div className="h-title" style={{ marginBottom: 8 }}>Account not set up yet</div>
+          <p className="muted" style={{ maxWidth: 400, textAlign: "center" }}>
+            Your account isn&apos;t fully set up yet. Contact your account manager —
+            they need to assign you to a company and ensure your name or email
+            matches your QuickBooks record.
           </p>
         </div>
       </div>

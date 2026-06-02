@@ -1,14 +1,16 @@
 import { requireRole } from "@/lib/auth";
 import { db } from "@/db";
-import { cfoUsers } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { cfoUsers, cfoQbConnections, cfoQbCustomers } from "@/db/schema";
+import { and, eq, or } from "drizzle-orm";
 import { z } from "zod";
 
 const bodySchema = z.object({
   companyId: z.string().uuid().nullable(),
 });
 
-// PATCH /api/customers/:id — super_admin assigns a portal customer to a company
+// PATCH /api/customers/:id — super_admin assigns a portal customer to a company.
+// When companyId is set, auto-matches the portal user to a QB customer by email
+// (falls back to display name match) and stores qbCustomerId automatically.
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -19,7 +21,7 @@ export async function PATCH(
     const body = bodySchema.parse(await request.json());
 
     const [target] = await db
-      .select({ id: cfoUsers.id, role: cfoUsers.role })
+      .select({ id: cfoUsers.id, role: cfoUsers.role, email: cfoUsers.email, name: cfoUsers.name })
       .from(cfoUsers)
       .where(eq(cfoUsers.id, id))
       .limit(1);
@@ -31,16 +33,44 @@ export async function PATCH(
       return Response.json({ error: "Only customer users can be assigned" }, { status: 400 });
     }
 
+    // Auto-match QB customer when a company is being assigned
+    let qbCustomerId: string | null = null;
+    if (body.companyId) {
+      const [conn] = await db
+        .select({ realmId: cfoQbConnections.realmId })
+        .from(cfoQbConnections)
+        .where(eq(cfoQbConnections.userId, body.companyId))
+        .limit(1);
+
+      if (conn) {
+        // Try email match first, then display name match
+        const qbCustomers = await db
+          .select({ qbId: cfoQbCustomers.qbId, email: cfoQbCustomers.email, displayName: cfoQbCustomers.displayName })
+          .from(cfoQbCustomers)
+          .where(eq(cfoQbCustomers.realmId, conn.realmId));
+
+        const byEmail = target.email
+          ? qbCustomers.find(c => c.email?.toLowerCase() === target.email.toLowerCase())
+          : null;
+        const byName = target.name
+          ? qbCustomers.find(c => c.displayName?.toLowerCase() === target.name!.toLowerCase())
+          : null;
+
+        qbCustomerId = byEmail?.qbId ?? byName?.qbId ?? null;
+      }
+    }
+
     const [updated] = await db
       .update(cfoUsers)
       .set({
         companyId: body.companyId,
+        qbCustomerId,
         updatedAt: new Date(),
       })
       .where(eq(cfoUsers.id, id))
       .returning();
 
-    return Response.json({ user: updated });
+    return Response.json({ user: updated, qbMatched: !!qbCustomerId });
   } catch (err) {
     if (err instanceof z.ZodError) {
       return Response.json({ error: err.issues[0]?.message ?? "Invalid input" }, { status: 400 });

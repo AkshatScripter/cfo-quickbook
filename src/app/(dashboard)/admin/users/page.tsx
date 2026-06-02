@@ -60,10 +60,20 @@ export default function AdminUsers() {
         body: JSON.stringify({ companyId: companyId || null }),
       });
       if (!res.ok) throw new Error("Assignment failed");
+      const data = await res.json();
       setUsers(prev =>
-        prev.map(u => u.id === userId ? { ...u, companyId: companyId || null } : u)
+        prev.map(u => u.id === userId
+          ? { ...u, companyId: companyId || null, qbCustomerId: data.user?.qbCustomerId ?? null }
+          : u
+        )
       );
-      toast.success(companyId ? "Customer assigned to company" : "Customer unassigned");
+      if (!companyId) {
+        toast.success("Customer unassigned");
+      } else if (data.qbMatched) {
+        toast.success("Customer assigned — QB customer matched automatically");
+      } else {
+        toast.warning("Customer assigned — no matching QB customer found (email/name didn't match)");
+      }
     } catch {
       toast.error("Failed to assign customer");
     } finally {
