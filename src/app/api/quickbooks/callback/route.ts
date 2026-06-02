@@ -6,6 +6,7 @@ import { cfoQbTokens, cfoQbConnections, cfoActivityLogs } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { syncCompany } from "@/lib/quickbooks/sync";
 import { encryptToken } from "@/lib/quickbooks/tokens";
+import { qbGetCompanyInfo } from "@/lib/quickbooks/client";
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL!;
 
@@ -92,6 +93,17 @@ export async function GET(request: NextRequest) {
       status: "success",
       details: { realmId },
     });
+
+    // Fetch company name from QB and persist it (best-effort, non-blocking)
+    qbGetCompanyInfo(realmId, userId)
+      .then((name) => {
+        if (!name) return;
+        return db
+          .update(cfoQbConnections)
+          .set({ companyName: name })
+          .where(eq(cfoQbConnections.realmId, realmId));
+      })
+      .catch(console.error);
 
     // Trigger initial sync in the background (don't await — let it run async)
     syncCompany(realmId, userId).catch(console.error);

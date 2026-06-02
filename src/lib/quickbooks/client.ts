@@ -45,6 +45,20 @@ export async function qbCdc(
   return qbGet(realmId, userId, `cdc?${params}`) as Promise<QBCDCResponse>;
 }
 
+// Fetch the QB company name for a connected realm.
+export async function qbGetCompanyInfo(
+  realmId: string,
+  userId: string
+): Promise<string | null> {
+  try {
+    const data = await qbGet(realmId, userId, `companyinfo/${realmId}`);
+    const info = (data as { CompanyInfo?: { CompanyName?: string } }).CompanyInfo;
+    return info?.CompanyName ?? null;
+  } catch {
+    return null; // non-critical — dashboard works without a name
+  }
+}
+
 // Extract one entity's changed rows from a CDC response.
 export function cdcRows<T>(cdc: QBCDCResponse, entity: QBEntity): T[] {
   const queryResponses = cdc.CDCResponse?.[0]?.QueryResponse ?? [];
