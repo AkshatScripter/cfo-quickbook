@@ -1,10 +1,9 @@
 import { requireRole } from "@/lib/auth";
 import { db } from "@/db";
 import { cfoUsers } from "@/db/schema";
-import { eq } from "drizzle-orm";
-import { createAdminClient } from "@/lib/supabase/server";
+import { eq, desc } from "drizzle-orm";
 
-// GET /api/admin/users — all users
+// GET /api/admin/users — all customer-role users
 export async function GET() {
   try {
     await requireRole("super_admin");
@@ -21,7 +20,8 @@ export async function GET() {
         createdAt: cfoUsers.createdAt,
       })
       .from(cfoUsers)
-      .orderBy(cfoUsers.createdAt);
+      .where(eq(cfoUsers.role, "customer"))
+      .orderBy(desc(cfoUsers.createdAt));
 
     return Response.json({ users });
   } catch (err) {
@@ -38,7 +38,11 @@ export async function PATCH(request: Request) {
 
     const updates: Partial<typeof cfoUsers.$inferInsert> = {};
     if (typeof body.isActive === "boolean") updates.isActive = body.isActive;
-    if (body.role === "super_admin" || body.role === "company" || body.role === "customer") {
+    if (
+      body.role === "super_admin" ||
+      body.role === "company" ||
+      body.role === "customer"
+    ) {
       updates.role = body.role;
     }
 
