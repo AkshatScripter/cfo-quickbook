@@ -8,6 +8,7 @@ import {
   numeric,
   jsonb,
   pgEnum,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
@@ -110,7 +111,9 @@ export const cfoQbInvoices = pgTable("cfo_qb_invoices", {
   status: invoiceStatusEnum("status").notNull().default("Open"),
   rawData: jsonb("raw_data"),
   syncedAt: timestamp("synced_at").notNull().defaultNow(),
-});
+}, (t) => [
+  uniqueIndex("cfo_qb_invoices_realm_qb_idx").on(t.realmId, t.qbId),
+]);
 
 // ─── cfo_qb_payments ──────────────────────────────────────────────────────────
 // Raw payments synced from QB
@@ -127,7 +130,9 @@ export const cfoQbPayments = pgTable("cfo_qb_payments", {
   invoiceIds: jsonb("invoice_ids"), // array of QB invoice IDs this payment covers
   rawData: jsonb("raw_data"),
   syncedAt: timestamp("synced_at").notNull().defaultNow(),
-});
+}, (t) => [
+  uniqueIndex("cfo_qb_payments_realm_qb_idx").on(t.realmId, t.qbId),
+]);
 
 // ─── cfo_qb_expenses ──────────────────────────────────────────────────────────
 // Raw expenses (bills, purchases) synced from QB
@@ -145,7 +150,9 @@ export const cfoQbExpenses = pgTable("cfo_qb_expenses", {
   expenseDate: date("expense_date"),
   rawData: jsonb("raw_data"),
   syncedAt: timestamp("synced_at").notNull().defaultNow(),
-});
+}, (t) => [
+  uniqueIndex("cfo_qb_expenses_realm_qb_idx").on(t.realmId, t.qbId),
+]);
 
 // ─── cfo_qb_accounts ──────────────────────────────────────────────────────────
 // Chart of accounts from QB
@@ -161,7 +168,9 @@ export const cfoQbAccounts = pgTable("cfo_qb_accounts", {
   isActive: boolean("is_active").notNull().default(true),
   rawData: jsonb("raw_data"),
   syncedAt: timestamp("synced_at").notNull().defaultNow(),
-});
+}, (t) => [
+  uniqueIndex("cfo_qb_accounts_realm_qb_idx").on(t.realmId, t.qbId),
+]);
 
 // ─── cfo_qb_customers ─────────────────────────────────────────────────────────
 // Customers synced from QB
@@ -178,7 +187,9 @@ export const cfoQbCustomers = pgTable("cfo_qb_customers", {
   isActive: boolean("is_active").notNull().default(true),
   rawData: jsonb("raw_data"),
   syncedAt: timestamp("synced_at").notNull().defaultNow(),
-});
+}, (t) => [
+  uniqueIndex("cfo_qb_customers_realm_qb_idx").on(t.realmId, t.qbId),
+]);
 
 // ─── cfo_calculated_reports ───────────────────────────────────────────────────
 // Cached results of calculated CFO reports (Revenue, Cash Flow, KPI, Risk)
