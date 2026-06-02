@@ -1,20 +1,31 @@
 # QuickBooks Integration Workflow
 
-> Complete, project-specific reference for how QuickBooks Online (QBO) data flows into this app, how we authorize, sync, store, and display it, and what is automatic vs. manual.
+> Complete, project-specific reference for how QuickBooks Online (QBO) data flows into this app.
+> Covers authorization, sync strategy, entity mapping, webhooks, rate limits, and what is automatic vs. manual.
 >
-> **Researched against the QBO Accounting API as of June 2026 (minor version 75).** Sources are linked at the bottom.
+> **Source of truth for product requirements: `project-overview.md`**
+> **Researched against the QBO Accounting API as of June 2026 (minor version 75).**
+> Sources linked at the bottom.
 
 ---
 
 ## 0. TL;DR — What this app does with QuickBooks
 
-1. A **company** (or a **super_admin** on their behalf) connects their QuickBooks Online account via OAuth 2.0.
-2. We store the OAuth tokens server-side (`cfo_qb_tokens`) and the connection metadata (`cfo_qb_connections`).
-3. On connect, on a daily cron, and on manual trigger, we **pull** invoices, payments, expenses, and accounts from the QBO API into our own Postgres tables (`cfo_qb_*`).
-4. We run derived **CFO calculations** (revenue, cash flow, KPI, risk) over the synced data and cache them in `cfo_calculated_reports`.
-5. Dashboard pages read **only from our DB** (never live from QBO), so the UI is fast and works even when QBO is rate-limited or the token is briefly invalid.
+1. A **company** owner (or **super_admin** on their behalf) connects their QuickBooks Online account via OAuth 2.0.
+2. We store OAuth tokens server-side in `cfo_qb_tokens` (encrypted at rest with AES-256-GCM) and connection metadata in `cfo_qb_connections`.
+3. On connect, on a daily cron (06:00 UTC), and on manual trigger, we **pull** from QBO into our Postgres tables:
+   - Invoices → `cfo_qb_invoices`
+   - Payments → `cfo_qb_payments`
+   - Expenses (Purchases) → `cfo_qb_expenses`
+   - Chart of Accounts → `cfo_qb_accounts`
+   - Customers → `cfo_qb_customers`
+   - Profit & Loss *(planned — via QBO Reports API; currently derived from synced data)*
+4. We run **CFO calculations** (revenue, cash flow, KPI, risk) over synced data and cache them in `cfo_calculated_reports`.
+5. After each sync, **AI insights are regenerated** per company *(planned — `ai_insights` table not yet built)*.
+6. Dashboard pages read **only from our DB** — never live from QBO. The UI is fast and survives QBO outages or rate limits.
+7. QBO webhooks push real-time change notifications → we fetch + upsert the changed record immediately.
 
-> **Key principle:** QBO is the source of truth; our DB is a synced *read replica* scoped per company (`realmId`). The UI never calls QBO directly — it calls our `/api/*` routes, which read our DB.
+> **Key principle:** QBO is the source of truth for financial data; our DB is a synced *read replica* scoped per company (`realmId`). The UI calls our `/api/*` routes, which read our DB.
 
 ---
 
@@ -22,14 +33,14 @@
 
 | QBO concept | What it is | Where it lives in our app |
 |---|---|---|
-| **`realmId`** (Company ID) | Unique ID of one QuickBooks **company file**. Every API call is scoped to one realm. | `cfo_qb_connections.realmId`, `cfo_qb_tokens.realmId`, and `realmId` on every `cfo_qb_*` table |
-| **Access token** | Bearer token, **expires in 60 minutes**. | `cfo_qb_tokens.accessToken` + `expiresAt` |
-| **Refresh token** | Used to mint new access tokens. Rotates frequently (see §3.3). | `cfo_qb_tokens.refreshToken` |
-| **Entity** | A record type: `Invoice`, `Payment`, `Purchase`, `Bill`, `Customer`, `Account`, etc. | One `cfo_qb_*` table per entity we sync |
-| **`SyncToken`** | Per-record version counter. Must be sent on updates; also used to detect stale data. | Stored inside `rawData` JSONB (we don't write back yet) |
-| **Minor version** | API schema version. **Must be ≥ 75** as of Aug 1, 2025. | Query string `minorversion=` in `client.ts` |
+| **`realmId`** (Company ID) | Unique ID of one QuickBooks **company file**. Every API call is scoped to one realm. | `cfo_qb_connections.realmId`, `cfo_qb_tokens.realmId`, and `realmId` column on every `cfo_qb_*` table |
+| **Access token** | Bearer token, **expires in 60 minutes**. | `cfo_qb_tokens.accessToken` (AES-256-GCM encrypted) + `expiresAt` |
+| **Refresh token** | Used to mint new access tokens. **Rotates on every use.** | `cfo_qb_tokens.refreshToken` (AES-256-GCM encrypted) |
+| **Entity** | A record type: `Invoice`, `Payment`, `Purchase`, `Customer`, `Account`, etc. | One `cfo_qb_*` table per entity type we sync |
+| **`SyncToken`** | Per-record version counter. Required when writing back to QBO. | Stored inside `rawData` JSONB — we don't write back yet |
+| **Minor version** | API schema version. Must be **≥ 75** (versions 1–74 deprecated Aug 2025). | `MINOR_VERSION = 75` constant in `client.ts` |
 
-**One company file = one `realmId`.** A QuickBooks login can have access to multiple company files; each is authorized separately and produces its own `realmId`. This maps cleanly to our multi-company model: one `cfo_qb_connections` row per realm.
+**One company file = one `realmId`.** A single Intuit login may have access to multiple company files; each is authorized and synced independently.
 
 ---
 
@@ -40,34 +51,42 @@
 │  Company /  │──────────▶ │  Intuit OAuth    │
 │ super_admin │            │  (appcenter)     │
 └─────────────┘            └────────┬─────────┘
-       │                            │ code → tokens
+       │                            │ code → encrypted tokens
        │                            ▼
-       │                   cfo_qb_tokens / cfo_qb_connections
+       │                   cfo_qb_tokens (AES-256-GCM)
+       │                   cfo_qb_connections
        │
-       │  manual sync (button)          daily cron (06:00 UTC)
-       ▼                                        │
-┌────────────────────────┐                      │
-│ POST /api/quickbooks/   │   POST /api/cron/sync (Bearer CRON_SECRET)
-│ sync                    │◀─────────────────────┘
-└───────────┬─────────────┘
+       │  QB change event (real-time)
+       │  POST /api/quickbooks/webhook ──HMAC verify──▶ cfo_webhook_events
+       │                                                       │
+       │  manual sync (button)   daily cron (06:00 UTC)        │ async fetch+upsert
+       ▼                                   │                   ▼
+┌────────────────────────┐                 │        syncEntityById / deleteEntityById
+│ POST /api/quickbooks/  │◀────────────────┘
+│ sync                   │  POST /api/cron/sync (Bearer CRON_SECRET)
+└───────────┬────────────┘
             ▼
-   syncCompany(realmId, userId)   ── src/lib/quickbooks/sync.ts
+   syncCompany(realmId, userId)          src/lib/quickbooks/sync.ts
             │
-            │  qbQuery(...) → QBO /query endpoint (auto token refresh)
+            │  resolveSyncMode(lastSyncAt)
+            ├─── full (first sync or >30d stale) ──▶ fetchAllPages + delete-then-insert
+            └─── incremental (<30d)               ──▶ qbCdc + onConflictDoUpdate
+            │
+            │  QBO /query or /cdc endpoint  (token auto-refreshed)
             ▼
-   cfo_qb_invoices / cfo_qb_payments / cfo_qb_expenses / cfo_qb_accounts
+   cfo_qb_invoices / cfo_qb_payments / cfo_qb_expenses
+   cfo_qb_accounts / cfo_qb_customers
             │
             ▼
-   runAllCalculations(realmId)    ── src/lib/calculations/index.ts
+   runAllCalculations(realmId)           src/lib/calculations/index.ts
             │
             ▼
    cfo_calculated_reports  (revenue_analysis | cash_flow | kpi | risk)
             │
+            ▼  [planned] regenerate ai_insights per company
             ▼
    GET /api/dashboard/*  ──reads cache──▶  Dashboard pages (UI)
 ```
-
-**The UI never touches QuickBooks.** It reads `cfo_qb_*` and `cfo_calculated_reports` through our API routes. This is why the dashboard stays responsive and survives QBO outages or rate limits.
 
 ---
 
@@ -75,25 +94,24 @@
 
 ### 3.1 The flow (Authorization Code grant)
 
-QuickBooks uses standard OAuth 2.0 Authorization Code grant. Our implementation lives in `src/lib/quickbooks/oauth.ts`.
+Implementation: `src/lib/quickbooks/oauth.ts` + `src/app/api/quickbooks/connect/route.ts` + `src/app/api/quickbooks/callback/route.ts`.
 
 ```
 1. User clicks "Connect QuickBooks"
        → GET /api/quickbooks/connect
-       → builds auth URL, redirects to Intuit
-   ┌───────────────────────────────────────────────────────────┐
-   │ https://appcenter.intuit.com/connect/oauth2                 │
-   │   ?client_id=...                                            │
-   │   &redirect_uri=...                                         │
-   │   &response_type=code                                       │
-   │   &scope=com.intuit.quickbooks.accounting                   │
-   │   &state=<csrf-token>                                       │
-   └───────────────────────────────────────────────────────────┘
-2. User logs into Intuit, picks a company, approves.
-3. Intuit redirects back to our redirect_uri with ?code=...&realmId=...&state=...
-       → GET /api/quickbooks/callback
-4. We verify `state`, then exchange `code` for tokens (POST to token endpoint).
-5. We persist tokens (cfo_qb_tokens) + connection (cfo_qb_connections) keyed by realmId.
+       → builds auth URL with CSRF state token, redirects to Intuit
+
+   https://appcenter.intuit.com/connect/oauth2
+     ?client_id=QUICKBOOKS_CLIENT_ID
+     &redirect_uri=QUICKBOOKS_REDIRECT_URI
+     &response_type=code
+     &scope=com.intuit.quickbooks.accounting
+     &state=<userId:randomHex>
+
+2. User logs into Intuit, selects their company file, approves.
+3. Intuit redirects to: /api/quickbooks/callback?code=...&realmId=...&state=...
+4. We verify state, exchange code for tokens, encrypt + persist both tokens.
+5. Initial full sync runs immediately in the background (fire-and-forget).
 ```
 
 ### 3.2 Endpoints & scope
@@ -105,169 +123,223 @@ QuickBooks uses standard OAuth 2.0 Authorization Code grant. Our implementation 
 | Sandbox API base | `https://sandbox-quickbooks.api.intuit.com/v3/company` |
 | Production API base | `https://quickbooks.api.intuit.com/v3/company` |
 
-- **Scope we need:** `com.intuit.quickbooks.accounting` (read accounting data). We do **not** need `com.intuit.quickbooks.payments` unless we process payments through Intuit.
-- Token auth uses HTTP Basic with `base64(client_id:client_secret)` on the token endpoint.
+- **Scope:** `com.intuit.quickbooks.accounting` — enough to read all accounting data.
+- **Not needed:** `com.intuit.quickbooks.payments` (only required if processing payments through Intuit).
+- Token endpoint uses HTTP Basic auth: `base64(client_id:client_secret)`.
 
-### 3.3 Token lifetimes (⚠️ updated policy — affects our sync design)
+### 3.3 Token lifetimes & rotation (critical — affects sync design)
 
 | Token | Lifetime | Notes |
 |---|---|---|
-| **Access token** | **60 minutes** | Refresh proactively; we refresh if it expires within 10 min (`client.ts → getValidToken`). |
-| **Refresh token** | **Rotates roughly every 24 hours**; each new refresh token is valid up to **5 years** max. | **Old "valid as long as used within 100 days / effectively permanent" model is gone.** |
+| **Access token** | **60 minutes** | We refresh proactively when ≤10 min remain (`getValidToken` in `client.ts`). |
+| **Refresh token** | **Rotates on every use**; valid up to **5 years** max (hard cap from Nov 2025). | Old "valid as long as used within 100 days" model is **gone**. |
 
-**What changed (2023–2025 rollout, formalized Nov 2025):**
-- Refresh tokens now have a **hard 5-year cap** (for `accounting` scope, tokens issued from Oct 2023; first expiries land Oct 2028).
-- Refresh tokens **rotate**: every token refresh may return a **new refresh token** that you must persist, replacing the old one. Old refresh tokens become invalid.
-- The token response now includes a field indicating **when the refresh token expires** — store it so we can warn the user before it lapses.
+**What this means for our code:**
+- ✅ `forceRefreshToken` in `client.ts` always persists the **new** refresh token from every response — required because rotation invalidates the old one immediately.
+- ✅ Both tokens are AES-256-GCM encrypted before DB storage (`src/lib/quickbooks/tokens.ts`).
+- ⚠️ We don't yet store `x_refresh_token_expires_in` — adding this would let the UI warn a company before their 5-year token cap is reached.
+- ⚠️ If a token refresh fails (`invalid_grant`), we set `cfo_qb_connections.isActive = false` and `syncError` — the UI should surface this so the company owner reconnects.
 
-**Implications for our code (we already do most of this, but verify):**
-- ✅ `forceRefreshToken` in `client.ts` already persists `fresh.refresh_token` back to the DB on every refresh — this is **required** because of rotation. Do **not** assume the refresh token is stable.
-- ⚠️ We should also persist `x_refresh_token_expires_in` (we currently ignore it) so the UI can prompt reconnect before the 5-year cap.
-- ⚠️ If a company's app is idle for a long time and we never refresh, rotation means a stale refresh token will fail with `invalid_grant` → we mark the connection broken (`isActive = false`) and prompt reconnect. This path already exists in `forceRefreshToken`'s catch block.
+### 3.4 Token encryption
+
+Tokens are encrypted with **AES-256-GCM** in `src/lib/quickbooks/tokens.ts` before any DB write.
+
+```
+Storage format (single hex string):
+  iv (12 bytes / 24 hex) | authTag (16 bytes / 32 hex) | ciphertext (variable)
+
+Key: QUICKBOOKS_TOKEN_ENC_KEY — 64-char hex (32 bytes)
+Generate: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+> ⚠️ **Spec originally required Supabase Vault** for token storage. We intentionally chose app-level AES-256-GCM instead — it is self-contained, requires no Supabase Vault extension, and is equally secure for our threat model. If Supabase Vault is enabled in future, tokens can be migrated without schema changes (column type stays `text`).
+
+> ⚠️ **Existing plaintext tokens** in `cfo_qb_tokens` will throw a "Token format invalid — please reconnect" error on first use after this change is deployed. Fix: each company reconnects QB once to re-issue encrypted tokens.
 
 ---
 
-## 4. ⚠️ Known issues in current code (fix before production)
+## 4. Spec requirements vs. current implementation status
 
-These are concrete mismatches found in the current implementation.
+This table maps every QB-related requirement from `project-overview.md` to its current state.
 
-> **Status (2026-06-02):** #1, #2, #3 have been **fixed** — env vars standardized on `QUICKBOOKS_*` with a committed `.env.example`, `minorversion=75`, and the API base URL is now env-driven via `QUICKBOOKS_API_BASE` (defaults to sandbox). #4–#8 remain open.
+### 4.1 QuickBooks integration (from spec §Core Features #2)
 
+| Spec requirement | Status | Notes |
+|---|---|---|
+| OAuth2 connection flow | ✅ Built | `/api/quickbooks/connect` + `/api/quickbooks/callback` |
+| Company owner connects their QB account | ✅ Built | Via `/qb-connect` page |
+| Superadmin can connect QB on behalf of company | ✅ Built | State param carries `userId` |
+| Token storage — encrypted | ✅ Built | AES-256-GCM in `cfo_qb_tokens` |
+| Token auto-refresh before expiry | ✅ Built | `getValidToken` refreshes if ≤10 min remain |
+| Daily automatic sync (06:00 UTC) | ✅ Built | `POST /api/cron/sync` with `CRON_SECRET` |
+| On-demand manual sync | ✅ Built | `POST /api/quickbooks/sync` |
+| Sync: Invoices | ✅ Built | `cfo_qb_invoices`, paginated, CDC-aware |
+| Sync: Customers | ✅ Built | `cfo_qb_customers`, paginated, CDC-aware |
+| Sync: Payments | ✅ Built | `cfo_qb_payments`, paginated, CDC-aware |
+| Sync: Expenses | ✅ Built | `cfo_qb_expenses` (from QB `Purchase` entity), paginated, CDC-aware |
+| Sync: Profit & Loss | ⏳ Planned | Spec requires this. Currently *derived* from invoices/expenses in `calculations/index.ts`. For accountant-accurate P&L, use the QBO Reports API (`/reports/ProfitAndLoss`) — see §8. |
+| Error handling on sync failure | ✅ Partial | `syncError` logged to `cfo_qb_connections` + `cfo_activity_logs`. **429 backoff/retry not yet implemented** — see §9. |
+| Sync status visible on dashboard | ⏳ Planned | `lastSyncAt` + `syncError` are stored in `cfo_qb_connections` but no dashboard UI component reads them yet. |
+| Real-time updates via webhooks | ✅ Built | `POST /api/quickbooks/webhook` with HMAC-SHA256 verification |
+| Incremental sync (CDC) | ✅ Built | Full sync on first connect or if >30 days stale; CDC thereafter |
 
-| # | Issue | Location | Fix |
+### 4.2 Spec DB tables vs. current schema
+
+The spec (`project-overview.md`) defines 10 tables. Here is how each maps to our actual schema:
+
+| Spec table | Our table | Status | Gap |
 |---|---|---|---|
-| 1 | **Env var name mismatch.** `oauth.ts` reads `QUICKBOOKS_CLIENT_ID`, `QUICKBOOKS_CLIENT_SECRET`, `QUICKBOOKS_REDIRECT_URI`, but `CLAUDE.md`/spec use `QB_CLIENT_ID` / `QB_REDIRECT_URI` (and spec also shows `NEXT_PUBLIC_QB_CLIENT_ID`). **OAuth will silently break** if the wrong names are set. | `src/lib/quickbooks/oauth.ts` | Pick one naming convention and align `.env`, code, and docs. Recommend `QUICKBOOKS_*` (matches code). Do **not** make the client ID `NEXT_PUBLIC_` — it is used only server-side. |
-| 2 | **Deprecated minor version.** `client.ts` sends `minorversion=65`. Minor versions 1–74 were **deprecated Aug 1, 2025** and are ignored (server falls back to 75). | `src/lib/quickbooks/client.ts` | Change to `minorversion=75`. |
-| 3 | **Sandbox URL hardcoded.** `QB_BASE` is the sandbox host. Production will hit the wrong server. | `src/lib/quickbooks/client.ts` | Drive base URL from env (`QUICKBOOKS_API_BASE`), sandbox in dev, `quickbooks.api.intuit.com` in prod. |
-| 4 | **No `Customer` sync.** Spec requires syncing customers; we only derive customer names from `CustomerRef` on invoices. | `src/lib/quickbooks/sync.ts` | Add a `syncCustomers` + `cfo_qb_customers` table (see §6). |
-| 5 | **No pagination.** Every sync caps at `MAXRESULTS 1000`. Companies with >1000 invoices silently lose data. | `src/lib/quickbooks/sync.ts` | Loop `STARTPOSITION` (see §5.3). |
-| 6 | **Full delete-then-insert every sync.** Doesn't scale to 100+ companies (spec goal) and burns rate limit. | `src/lib/quickbooks/sync.ts` | Move to **CDC incremental sync** (see §5.4). |
-| 7 | **Webhooks table exists but no handler.** `cfo_webhook_events` is defined but nothing writes to it. | — | Add `/api/quickbooks/webhook` (see §7). |
-| 8 | **Tokens stored in plaintext.** Spec requires encryption (Supabase Vault). | `cfo_qb_tokens` | Encrypt at rest before production. |
+| `profiles` | `cfo_users` | ✅ Exists | Missing `phone`, `avatar_url`. Extra: `companyId`, `isActive`. |
+| `companies` | *(none)* | ❌ **Not built** | Spec requires a standalone company profile (name, industry, email, phone, address) independent of QB connection. We only have `cfo_qb_connections` which is QB-specific. **Must build.** |
+| `client_company` | *(none)* | ❌ **Not built** | Spec requires a join table so one customer can buy from multiple companies. Without it the client dashboard "Companies I buy from" cannot work. **Must build.** |
+| `orders` | *(none)* | ❌ **Not built** | Spec requires `orders` with status flow (`pending → confirmed → shipped → delivered → cancelled`). Client dashboard "Place new order" has no backend. **Must build.** |
+| `invoices` (portal-managed) | `cfo_qb_invoices` | ⚠️ Partial | We sync QB invoices. Spec also requires *portal-native* invoices (with `qb_invoice_id` as an optional link). Statuses differ: QB = `Open/Paid/Voided/Draft` vs spec = `draft/sent/viewed/paid/overdue`. |
+| `payments` (portal-managed) | `cfo_qb_payments` | ⚠️ Partial | We sync QB payments. Spec requires portal-native payments linked to portal invoices. |
+| `expenses` | `cfo_qb_expenses` | ✅ Functionally equivalent | Spec uses `company_id` FK; we use `realmId`. Same data. |
+| `chat_history` | *(none)* | ❌ **Not built** | AI chat turns are not persisted. Spec: store indefinitely, index on `conversation_id`. **Must build for AI chat feature.** |
+| `ai_insights` | *(none)* | ❌ **Not built** | No daily insight cache. Spec: 24-hour expiry, `insight_type`, `severity`. **Must build.** |
+| `qb_sync_logs` | `cfo_activity_logs` | ⚠️ Partial | `cfo_activity_logs` captures sync events but lacks: per-entity `sync_type`, `records_synced`, `started_at`, `completed_at`. |
+
+### 4.3 Security gaps (from spec §Security)
+
+| Spec requirement | Status | Notes |
+|---|---|---|
+| RLS on every table | ❌ **Not built** | Spec: "All tables should have RLS policies enabled." No RLS exists on any `cfo_*` table. Without RLS, data isolation relies entirely on application-layer `requireRole` checks. **Critical before production.** |
+| Supabase Vault for QB tokens | ⚠️ Diverged | We use app-level AES-256-GCM instead (see §3.4). Functionally equivalent. |
+| Rate limiting on API endpoints | ❌ Not built | Spec mentions it; not implemented. |
+
+### 4.4 Remaining open items (must fix before production)
+
+- [ ] **Companies table** — standalone company profile independent of QB connection
+- [ ] **Client-company join table** — multi-company customer relationships
+- [ ] **Orders table** — client order placement and tracking
+- [ ] **Chat history table** — persist AI chat turns
+- [ ] **AI insights table** — 24-hour cached daily insights per company
+- [ ] **RLS policies** — on all `cfo_*` tables
+- [ ] **429 backoff/retry** — exponential backoff in `client.ts` (see §9)
+- [ ] **P&L from Reports API** — accountant-accurate profit & loss
+- [ ] **AI insight regeneration** — trigger after every sync (step 8 of spec sync flow)
+- [ ] **Sync status UI** — surface `lastSyncAt` + `syncError` on the dashboard
+- [ ] **Alert system** — 6 alert types from spec (see §alert-config below)
 
 ---
 
-## 5. Syncing data from QuickBooks
+## 5. Alert configuration (from `project-overview.md`)
 
-### 5.1 The Query Language (current approach)
+These thresholds are specified in the spec and must be implemented. No alert code exists yet.
 
-QBO exposes a SQL-like read endpoint:
+| Alert type | Threshold | Severity | Data source |
+|---|---|---|---|
+| Overdue Invoice | 10 days past due date | Medium | `cfo_qb_invoices` where `status=Open` and `dueDate < today - 10` |
+| Expense Spike | 20% above category average | Medium | `cfo_qb_expenses` — compare last 30d vs prior 30d |
+| Revenue Decline | 15% drop from last month | High | `cfo_calculated_reports` (revenue_analysis) |
+| Payment Delay | 3 days late | Low | `cfo_qb_invoices` vs `cfo_qb_payments` |
+| Client Churn Risk | 50% drop in purchases | High | `cfo_qb_payments` grouped by `customerName` |
+| Low Cash Flow | Below 30-day expense run rate | High | `cfo_calculated_reports` (cash_flow) |
+
+**Display:** color-coded cards on all dashboards. Red = High, Yellow = Medium, Green = positive.
+**Email alerts:** spec says build the infrastructure but keep disabled by default — add a settings toggle.
+
+---
+
+## 6. Syncing data from QuickBooks
+
+### 6.1 Sync modes
+
+`syncCompany` in `src/lib/quickbooks/sync.ts` picks a mode automatically:
+
+| Condition | Mode | Strategy |
+|---|---|---|
+| `lastSyncAt` is null (first sync) | **Full** | Paginated delete-then-insert |
+| `lastSyncAt` > 30 days ago | **Full** | Same — CDC max look-back is 30 days |
+| `lastSyncAt` ≤ 30 days ago | **Incremental (CDC)** | `/cdc?changedSince=lastSyncAt` + upsert |
+
+### 6.2 Full sync — paginated query
 
 ```
-GET /v3/company/{realmId}/query?query=<url-encoded SQL>&minorversion=75
-Authorization: Bearer <access_token>
-Accept: application/json
+GET /v3/company/{realmId}/query?query=<SQL>&minorversion=75
+Authorization: Bearer <decrypted_access_token>
 ```
 
-Example queries we use today (`sync.ts`):
-
+Entities and queries:
 ```sql
-SELECT * FROM Invoice  MAXRESULTS 1000
-SELECT * FROM Payment  MAXRESULTS 1000
-SELECT * FROM Purchase MAXRESULTS 1000          -- expenses
-SELECT * FROM Account WHERE Active = true MAXRESULTS 1000
+SELECT * FROM Invoice  STARTPOSITION 1 MAXRESULTS 1000   -- paginate until short page
+SELECT * FROM Payment  STARTPOSITION 1 MAXRESULTS 1000
+SELECT * FROM Purchase STARTPOSITION 1 MAXRESULTS 1000   -- expenses
+SELECT * FROM Account  WHERE Active = true STARTPOSITION 1 MAXRESULTS 1000
+SELECT * FROM Customer STARTPOSITION 1 MAXRESULTS 1000
 ```
 
-### 5.2 Query rules & limits
+**Pagination rules:**
+- Max 1,000 records per response; no cursor. Increment `STARTPOSITION` by 1,000 until the page is short.
+- `fetchAllPages` helper in `sync.ts` handles this loop for all entities.
+- Inserts are chunked at 500 rows/batch to stay under Postgres' bind-parameter limit.
 
-- **Max 1,000 records per response**, default **100**. There is **no cursor / next-page token**.
-- Pagination is manual via `STARTPOSITION` (1-based) and `MAXRESULTS`:
-  ```sql
-  SELECT * FROM Invoice STARTPOSITION 1    MAXRESULTS 1000
-  SELECT * FROM Invoice STARTPOSITION 1001 MAXRESULTS 1000
-  ```
-- Get totals with `SELECT COUNT(*) FROM Invoice`.
-- No `JOIN`s. Filter with `WHERE`, order with `ORDERBY`.
-
-### 5.3 Correct pagination pattern (to replace the 1000 cap)
-
-```ts
-async function syncAll(realmId: string, userId: string, entity: string) {
-  const PAGE = 1000;
-  let start = 1;
-  const all: unknown[] = [];
-  for (;;) {
-    const q = `SELECT * FROM ${entity} STARTPOSITION ${start} MAXRESULTS ${PAGE}`;
-    const data = await qbQuery(realmId, userId, q);
-    const rows = data?.QueryResponse?.[entity] ?? [];
-    all.push(...rows);
-    if (rows.length < PAGE) break;   // last page
-    start += PAGE;
-  }
-  return all;
-}
-```
-
-### 5.4 Incremental sync with CDC (recommended for production)
-
-**Change Data Capture (CDC)** returns only records changed since a timestamp — the recommended pattern for periodic polling. It avoids re-reading the entire dataset on every sync.
+### 6.3 Incremental sync — CDC
 
 ```
 GET /v3/company/{realmId}/cdc
   ?entities=Invoice,Payment,Purchase,Account,Customer
-  &changedSince=2026-05-01T00:00:00Z
+  &changedSince=<lastSyncAt ISO 8601>
   &minorversion=75
 ```
 
-- **Look-back window:** up to **30 days**. If a company's last sync was >30 days ago, fall back to a full paginated sync.
-- Returns all changed entities (created/updated/deleted) since `changedSince` in one response.
-- **Migration path:** keep delete-then-insert for the *first* sync (seed), then store `lastSyncAt` and use CDC for subsequent syncs, upserting by `(realmId, qbId)` and removing entities QBO marks deleted.
+- Returns all records changed since `changedSince` in one response (no pagination).
+- Rows are upserted via `onConflictDoUpdate` on the unique index `(realmId, qbId)`.
+- `Delete` operations on the webhook → `deleteEntityById` removes the local row.
 
-> We already store `cfo_qb_connections.lastSyncAt` — that's the timestamp to feed into `changedSince`.
+### 6.4 Seeding (first sync after OAuth connect)
 
-### 5.5 Seeding (first sync)
+1. `/api/quickbooks/callback` stores encrypted tokens → inserts `cfo_qb_connections`.
+2. Immediately fires `syncCompany(realmId, userId)` in the background (fire-and-forget).
+3. Full paginated sync runs for all 5 entities.
+4. `runAllCalculations(realmId)` runs → dashboard has data on first load.
+5. `lastSyncAt` is set → all future syncs use CDC.
 
-"Seeding" = the **initial full pull** right after a company connects:
+> Intuit's **sandbox** provides a pre-seeded company with sample data — no manual entry needed to test this flow.
 
-1. `/api/quickbooks/callback` stores tokens and inserts `cfo_qb_connections`.
-2. Immediately call `syncCompany(realmId, userId)` (or enqueue it) to do a **full paginated** pull of all entities.
-3. Run `runAllCalculations(realmId)` so the dashboard has data on first load.
-4. Set `lastSyncAt`. From here on, use CDC (incremental).
+### 6.5 Storage strategy
 
-> For **sandbox testing**, Intuit provides a pre-populated sandbox company with sample invoices, customers, and expenses — no manual data entry needed to test the seed path.
-
-### 5.6 Storage strategy (current)
-
-- Each entity table stores **flattened fields we query on** + the **full QBO payload in `rawData` (JSONB)** so we never lose data and can re-derive fields later.
-- Current sync is **idempotent by realm** via delete-then-insert. When moving to CDC, switch to **upsert on `(realmId, qbId)`**.
+- Every entity table stores **flattened queryable columns** + the **full QBO object in `rawData` (JSONB)** so no data is lost and fields can be re-derived without re-syncing.
+- **Full sync path:** delete all rows for the realm, then batch-insert fresh data.
+- **CDC path:** upsert by `(realmId, qbId)` using `onConflictDoUpdate` — unique indexes exist on all 5 entity tables (migration `0002`).
+- `syncedAt` is refreshed to `now()` on every upsert.
 
 ---
 
-## 6. Entity → table field mapping
+## 7. Entity → table field mapping
 
-What we pull and where it lands. (`rawData` always holds the complete QBO object.)
+`rawData` always holds the complete QBO object for each row.
 
 ### Invoice → `cfo_qb_invoices`
 | QBO field | Column | Notes |
 |---|---|---|
-| `Id` | `qbId` | QBO record id |
+| `Id` | `qbId` | |
 | `DocNumber` | `invoiceNumber` | |
 | `CustomerRef.value` / `.name` | `customerId` / `customerName` | |
 | `TotalAmt` | `totalAmount` | |
-| `Balance` | `balance` | amount still owed; `0` ⇒ paid |
+| `Balance` | `balance` | Amount still owed; `0` = paid |
 | `DueDate` / `TxnDate` | `dueDate` / `txnDate` | |
-| derived | `status` | `Paid` if balance≤0 & total>0; `Open` if balance>0; `Voided` if note contains "void"; else `Draft` (`mapInvoiceStatus`) |
+| derived | `status` | `Paid` if balance≤0 & total>0; `Open` if balance>0; `Voided` if PrivateNote contains "void"; else `Draft` |
 
 ### Payment → `cfo_qb_payments`
-| QBO field | Column |
-|---|---|
-| `Id` | `qbId` |
-| `CustomerRef` | `customerId` / `customerName` |
-| `TotalAmt` | `totalAmount` |
-| `TxnDate` | `paymentDate` |
-| `PaymentMethodRef.name` | `paymentMethod` |
-| `Line[].LinkedTxn[].TxnId` | `invoiceIds` (JSONB array) — which invoices this payment applied to (drives DSO/AR-days calc) |
+| QBO field | Column | Notes |
+|---|---|---|
+| `Id` | `qbId` | |
+| `CustomerRef` | `customerId` / `customerName` | |
+| `TotalAmt` | `totalAmount` | |
+| `TxnDate` | `paymentDate` | |
+| `PaymentMethodRef.name` | `paymentMethod` | |
+| `Line[].LinkedTxn[].TxnId` | `invoiceIds` (JSONB array) | Links payment to invoices — drives DSO/AR-days calc |
 
 ### Purchase → `cfo_qb_expenses`
-| QBO field | Column |
-|---|---|
-| `Id` | `qbId` |
-| `EntityRef` | `vendorId` / `vendorName` |
-| `Line[0].AccountBasedExpenseLineDetail.AccountRef` | `accountId` / `accountName` / `category` |
-| `TotalAmt` | `totalAmount` |
-| `TxnDate` | `expenseDate` |
-
-> ⚠️ We currently only read `Line[0]`. Multi-line purchases lose lines 2+. For accurate category breakdowns, iterate all lines.
+| QBO field | Column | Notes |
+|---|---|---|
+| `Id` | `qbId` | |
+| `EntityRef` | `vendorId` / `vendorName` | |
+| `Line[0].AccountBasedExpenseLineDetail.AccountRef` | `accountId` / `accountName` / `category` | ⚠️ Only `Line[0]` — multi-line purchases lose lines 2+ |
+| `TotalAmt` | `totalAmount` | |
+| `TxnDate` | `expenseDate` | |
 
 ### Account → `cfo_qb_accounts`
 | QBO field | Column |
@@ -278,143 +350,197 @@ What we pull and where it lands. (`rawData` always holds the complete QBO object
 | `CurrentBalance` | `currentBalance` |
 | `Active` | `isActive` |
 
-### Customer → `cfo_qb_customers` (NOT YET BUILT — spec requires it)
-Suggested columns from the QBO `Customer` entity: `qbId` (`Id`), `displayName` (`DisplayName`), `email` (`PrimaryEmailAddr.Address`), `phone`, `balance` (`Balance`), `billAddr` (JSONB), `active`, `rawData`.
+### Customer → `cfo_qb_customers`
+| QBO field | Column |
+|---|---|
+| `Id` | `qbId` |
+| `DisplayName` | `displayName` |
+| `PrimaryEmailAddr.Address` | `email` |
+| `PrimaryPhone.FreeFormNumber` | `phone` |
+| `Balance` | `balance` |
+| `BillAddr` | `billAddr` (JSONB) |
+| `Active` | `isActive` |
 
-### Other useful entities (not synced yet)
-- **`Bill`** — accounts *payable* (money we owe vendors). Spec's expense story is currently only `Purchase`; `Bill` gives a fuller AP picture.
-- **`SalesReceipt`** — paid-at-point-of-sale income (no invoice). Missing these undercounts revenue.
-- **`CreditMemo`** / **`RefundReceipt`** — reduce revenue; ignoring them overstates it.
+### Entities not yet synced (spec mentions or implied)
+
+| QBO entity | Why it matters | When to add |
+|---|---|---|
+| **`Bill`** | Accounts payable — money owed to vendors. More complete than `Purchase` alone. | When AP reporting is needed |
+| **`SalesReceipt`** | Point-of-sale income with no invoice. Ignoring these undercounts revenue. | Before P&L is accountant-accurate |
+| **`CreditMemo` / `RefundReceipt`** | Reduce revenue. Ignoring them overstates revenue. | Same |
+| **Profit & Loss (Reports API)** | Spec requires P&L sync. Currently derived/approximated. | When super_admin portfolio view is built |
 
 ---
 
-## 7. Webhooks (real-time updates — table exists, handler doesn't)
+## 8. Profit & Loss — spec requirement
 
-Webhooks let QBO **push** change notifications instead of us polling. Our schema already has `cfo_webhook_events`.
+Spec `project-overview.md` §QuickBooks Sync lists "Profit & Loss → summary reports" as a required sync type.
 
-### How QBO webhooks work
-- You register **one webhook URL** per app in the Intuit developer portal and pick which entities to subscribe to (Invoice, Payment, Bill, Customer, Account, etc.).
-- On a change, Intuit POSTs a notification containing **`realmId`, entity name, operation (`Create`/`Update`/`Delete`/`Void`/`Merge`), and entity `Id`** — **but not the changed data itself**.
-- Notifications can arrive **out of order or more than once** → the handler must be **idempotent**.
+**Current state:** `calculations/index.ts` derives an *approximation* of P&L from synced invoices and expenses. This ignores accruals, journal entries, and COGS adjustments.
 
-### Signature verification (required)
-Each request carries an `intuit-signature` header. Verify it:
-1. Compute `HMAC-SHA256(rawRequestBody, verifierToken)` where `verifierToken` comes from the portal.
-2. Base64-encode the digest and constant-time compare to the `intuit-signature` header.
-3. Reject (HTTP 401) if it doesn't match.
-
-### Recommended handler shape
+**Planned (accountant-accurate):** Use the QBO Reports API:
 ```
-POST /api/quickbooks/webhook   (must be in middleware's PUBLIC list)
-  1. Read raw body, verify intuit-signature.
-  2. For each notification: insert into cfo_webhook_events (processed=false).
-  3. Return 200 immediately (ack fast — Intuit retries on non-2xx).
-  4. Async: for each event, fetch the changed record by Id, upsert it, mark processed=true.
+GET /v3/company/{realmId}/reports/ProfitAndLoss
+  ?start_date=2026-01-01&end_date=2026-06-30&minorversion=75
 ```
 
-> Webhooks complement (don't replace) the daily cron: use webhooks for near-real-time freshness and the cron + CDC as a safety net for missed deliveries.
+Other useful reports: `BalanceSheet`, `CashFlow`, `AgedReceivables` (feeds our risk widget), `AgedPayables`.
+
+> Reports return a **nested row structure** (`Rows.Row[]`), not flat objects. Parse recursively. Reports do **not** support `STARTPOSITION`/`MAXRESULTS`.
+
+**Recommendation:** Keep derived calcs for the live dashboard widgets (fast, no extra API call). Use the Reports API for the super_admin portfolio view where accountant-grade accuracy is required.
 
 ---
 
-## 8. Reports API (for Profit & Loss — spec requirement)
+## 9. Webhooks
 
-The spec wants a **Profit & Loss** summary. Two options:
+### How they work
 
-1. **Derive it ourselves** (what `calculations/index.ts` does today) — revenue from invoices minus expenses. Fast, no extra API calls, but it's an *approximation* (ignores accruals, journal entries, COGS nuances).
-2. **Use the QBO Reports API** for accountant-accurate numbers:
-   ```
-   GET /v3/company/{realmId}/reports/ProfitAndLoss
-     ?start_date=2026-01-01&end_date=2026-06-30&minorversion=75
-   ```
-   Other useful reports: `BalanceSheet`, `CashFlow`, `AgedReceivables` (overdue AR — feeds our risk widget), `AgedPayables`.
+- Register one webhook URL in the Intuit developer portal; subscribe to entities.
+- On any change, Intuit POSTs a notification with: `realmId`, entity name, entity `Id`, operation (`Create`/`Update`/`Delete`/`Void`/`Merge`) — **but not the changed data**.
+- Our handler fetches the current record from QBO and upserts it.
+- Notifications can arrive out of order or more than once — handler is idempotent.
 
-> Reports return a **nested row structure**, not flat rows — parse `Rows.Row[]` recursively. Reports do **not** use `STARTPOSITION`/`MAXRESULTS`.
+### Current implementation (`src/app/api/quickbooks/webhook/route.ts`)
 
-**Recommendation:** keep our derived calcs for the live dashboard widgets (fast, cached), but pull `AgedReceivables` and `ProfitAndLoss` from the Reports API where accountant-grade accuracy matters (super_admin portfolio view).
+```
+POST /api/quickbooks/webhook  (in PUBLIC_API_PREFIXES — no auth session required)
+
+1. Read raw body as text (required for HMAC — parsed JSON body won't match).
+2. Verify: HMAC-SHA256(rawBody, QUICKBOOKS_WEBHOOK_VERIFIER_TOKEN) == intuit-signature header.
+   Uses timingSafeEqual to prevent timing attacks. Returns 401 on mismatch.
+3. Batch-insert all events into cfo_webhook_events (processed=false).
+4. Return 200 immediately — Intuit retries on non-2xx.
+5. Fire-and-forget processEvents():
+   - For each event: look up userId from cfo_qb_connections.
+   - "Delete" operation → deleteEntityById(realmId, entityType, qbId)
+   - All other operations → syncEntityById(realmId, userId, entityType, qbId)
+     (fetches single record from QBO by Id, upserts into correct local table)
+   - Mark processed=true. Failed events stay processed=false for debugging.
+```
+
+> Webhooks complement (don't replace) the daily cron. Use webhooks for near-real-time freshness; use the daily CDC sync as a safety net for any missed deliveries.
 
 ---
 
-## 9. Rate limits & quotas (design the sync around these)
+## 10. Rate limits & quotas
 
 | Limit | Value | Scope |
 |---|---|---|
-| Standard requests | **500 / minute** | per company (`realmId`) |
+| Standard requests | **500 / minute** | per `realmId` |
 | Concurrent requests | **10** | per app |
-| Batch endpoint | **120 / minute** (as of Oct 31 2025 prod) | per `realmId` |
+| Batch endpoint | **120 / minute** (prod since Oct 2025) | per `realmId` |
 | Resource-intensive endpoints | **200 / minute** | per `realmId` |
-| Over limit | **HTTP 429 Too Many Requests** | retry with backoff |
+| Over limit response | **HTTP 429 Too Many Requests** | — |
 
-**App Partner Program (since Jul 2025):** read operations are metered. The free **Builder tier allows 500,000 read operations / month**; beyond that, reads are blocked or require a paid tier. → Another reason to use **CDC** (few reads) over full polling (many reads), especially at the spec's target of **100+ companies**.
+**App Partner Program (live Jul 2025):** free Builder tier = **500,000 read operations/month**. Beyond that, reads are blocked. CDC (few reads per sync) vs full polling (many reads) matters significantly at the spec target of **100+ companies**.
 
-**Handling 429s:** wrap `callApi` with exponential backoff + jitter; respect any `Retry-After` header. Cap concurrency at ≤10 across all in-flight company syncs.
+**⚠️ 429 backoff not yet implemented.** `client.ts` currently throws immediately on non-2xx. Required before production:
+- Exponential backoff with jitter on 429 responses.
+- Respect the `Retry-After` header if present.
+- Cap total concurrency to ≤10 in-flight company syncs at once.
 
 ---
 
-## 10. Automatic vs. manual tasks
+## 11. Automatic vs. manual tasks
 
-### ✅ Automatic
+### ✅ Automatic (no human needed)
+
 | Task | Trigger | Code |
 |---|---|---|
-| Access-token refresh | On demand, when token expires within 10 min of an API call | `client.ts → getValidToken` / `forceRefreshToken` |
-| Refresh-token rotation persistence | Every refresh writes back the new refresh token | `forceRefreshToken` |
+| Access token refresh | On any API call when token ≤10 min from expiry | `client.ts → getValidToken / forceRefreshToken` |
+| Refresh token rotation persistence | Every token refresh persists the new token | `forceRefreshToken` |
 | Daily full/incremental sync | Cron at **06:00 UTC** | `POST /api/cron/sync` → `syncCompany` |
+| First-time seed sync | After OAuth callback | `callback/route.ts` → `syncCompany` (fire-and-forget) |
+| CDC vs full decision | Each sync call | `resolveSyncMode(lastSyncAt)` |
 | CFO calculations | After every sync | `runAllCalculations` |
 | `lastSyncAt` / `syncError` bookkeeping | After every sync | `syncCompany` |
 | Activity logging | After sync success/failure | `cfo_activity_logs` |
-| Real-time updates *(once built)* | QBO webhook POST | `/api/quickbooks/webhook` |
+| Webhook processing | On Intuit POST to `/api/quickbooks/webhook` | `processEvents` (fire-and-forget) |
 
 ### ✋ Manual (requires a human)
+
 | Task | Who | Notes |
 |---|---|---|
-| Initial QuickBooks connection (OAuth consent) | company owner or super_admin | Can't be automated — Intuit requires interactive login + company selection |
-| Reconnect after refresh-token expiry/revoke | company owner or super_admin | Triggered when `isActive=false` / `invalid_grant` |
-| On-demand sync ("Sync now" button) | any dashboard user with access | `POST /api/quickbooks/sync` |
-| Choosing which QBO company to connect | user | A login may have multiple company files |
-| Production go-live: app review | developer/owner | Intuit Technical + Security + Marketing review (weeks to months) |
-| Switching sandbox → production keys | developer | Dev and prod keys are **not** interchangeable |
+| Initial QuickBooks connection (OAuth consent) | Company owner or super_admin | Intuit requires interactive login + company selection — cannot be automated |
+| Reconnect after token expiry / revocation | Company owner or super_admin | Triggered when `isActive=false` or `invalid_grant`; the UI must surface this |
+| Reconnect after `QUICKBOOKS_TOKEN_ENC_KEY` rotation | Company owner or super_admin | Rotating the key invalidates all existing encrypted tokens |
+| On-demand sync ("Sync now" button) | Any dashboard user with company access | `POST /api/quickbooks/sync` |
+| Registering webhook URL in Intuit portal | Developer | One-time per environment; copy verifier token to `QUICKBOOKS_WEBHOOK_VERIFIER_TOKEN` |
+| Production go-live: app review | Developer / owner | Technical + Security + Marketing review (~6 weeks total) |
+| Switching sandbox → production keys | Developer | Dev and prod keys are not interchangeable |
+| Running DB migrations | Developer / DevOps | `npm run db:migrate` after every `git pull` that adds migrations |
 
 ---
 
-## 11. Environments & go-live checklist
+## 12. Environments & go-live checklist
 
 | | Sandbox | Production |
 |---|---|---|
-| API base | `https://sandbox-quickbooks.api.intuit.com` | `https://quickbooks.api.intuit.com` |
-| Keys | Development keys only | Production keys only (not interchangeable) |
-| Company data | Pre-seeded sample company | Real customer data |
+| API base | `https://sandbox-quickbooks.api.intuit.com` (default if `QUICKBOOKS_API_BASE` unset) | `https://quickbooks.api.intuit.com` |
+| Keys | Development keys only | Production keys only |
+| Data | Pre-seeded sample company | Real customer data |
+| Webhook URL | ngrok or similar tunnel | Public HTTPS domain |
 
-**Before going live:**
-- [ ] Fix env-var naming mismatch (§4 #1)
-- [ ] `minorversion=75` (§4 #2)
-- [ ] Env-driven API base URL (§4 #3)
-- [ ] Encrypt tokens at rest (Supabase Vault) (§4 #8)
-- [ ] Add pagination (§5.3) and/or CDC (§5.4)
-- [ ] Implement webhook handler + signature verification (§7)
-- [ ] Backoff/retry on 429 (§9)
+**Go-live checklist:**
+- [x] Env vars standardized on `QUICKBOOKS_*` + `.env.example` committed
+- [x] `minorversion=75`
+- [x] API base URL env-driven (`QUICKBOOKS_API_BASE`)
+- [x] Customer sync
+- [x] Pagination (`STARTPOSITION` loop)
+- [x] CDC incremental sync
+- [x] Webhook handler + HMAC-SHA256 signature verification
+- [x] Token encryption at rest (AES-256-GCM)
+- [ ] Companies table (standalone, independent of QB)
+- [ ] Client-company join table
+- [ ] Orders table
+- [ ] Chat history table
+- [ ] AI insights table (24h cache)
+- [ ] RLS policies on all `cfo_*` tables
+- [ ] Alert system (6 thresholds from spec)
+- [ ] 429 backoff/retry in `client.ts`
+- [ ] Profit & Loss via QBO Reports API (for super_admin view)
+- [ ] Sync status UI on dashboard
+- [ ] AI insight regeneration after each sync
 - [ ] Complete Intuit app review (Technical → Security → Marketing)
-- [ ] Register production redirect URI and webhook URL in the portal
+- [ ] Register production redirect URI + webhook URL in Intuit portal
+- [ ] Rotate all secrets to production values
 
 ---
 
-## 12. Environment variables (QuickBooks)
-
-> Names below match the **current code** (`oauth.ts`). Align `.env`, `CLAUDE.md`, and `project-overview.md` to these (see §4 #1).
+## 13. Environment variables (QuickBooks)
 
 ```
-QUICKBOOKS_CLIENT_ID        # Intuit app client ID (server-only — do NOT prefix NEXT_PUBLIC_)
-QUICKBOOKS_CLIENT_SECRET    # Intuit app client secret
-QUICKBOOKS_REDIRECT_URI     # OAuth callback, must exactly match the portal registration
-QUICKBOOKS_API_BASE                # sandbox vs production base URL (defaults to sandbox)
-QUICKBOOKS_WEBHOOK_VERIFIER_TOKEN  # (when webhooks added) HMAC key for signature verification
-CRON_SECRET                 # Bearer token guarding POST /api/cron/sync
+QUICKBOOKS_CLIENT_ID               # Intuit app client ID (server-only — never NEXT_PUBLIC_)
+QUICKBOOKS_CLIENT_SECRET           # Intuit app client secret
+QUICKBOOKS_REDIRECT_URI            # OAuth callback — must exactly match Intuit portal registration
+QUICKBOOKS_API_BASE                # Sandbox or production base URL (defaults to sandbox if unset)
+QUICKBOOKS_WEBHOOK_VERIFIER_TOKEN  # HMAC-SHA256 key from Intuit portal — required for webhook security
+QUICKBOOKS_TOKEN_ENC_KEY           # 64-char hex (32 bytes) AES-256-GCM key for token encryption at rest
+CRON_SECRET                        # Bearer token guarding POST /api/cron/sync
 ```
+
+See `MANUAL_ACTIONS.md` for where to get each value and how to generate the keys.
+
+---
+
+## 14. Architectural decisions (divergences from spec)
+
+| Spec said | What we built | Why |
+|---|---|---|
+| Tokens in `companies` table | Separate `cfo_qb_tokens` + `cfo_qb_connections` tables | Better separation of concerns — OAuth tokens have a different lifecycle than company metadata |
+| Supabase Vault for token encryption | App-level AES-256-GCM (`tokens.ts`) | Self-contained, no Vault extension dependency, equally secure. Can migrate to Vault later without schema changes. |
+| Supabase Edge Functions for cron | Next.js API route (`/api/cron/sync`) | Simpler — one codebase. Any external scheduler (Vercel Cron, GitHub Actions) can call the endpoint. |
+| `superadmin` / `client` role names | `super_admin` / `customer` in code | Snake-case matches Postgres enum conventions; `customer` avoids reserved-word conflicts. Spec uses `client` — keep `customer` in code everywhere. |
+| `profiles` table | `cfo_users` table | Prefixed to avoid collision with Supabase internal tables; adds `companyId` + `isActive` needed for our role model. |
+| AI: Claude API | Groq API (`llama-3.3-70b-versatile`) | No Claude API key available; Groq provides equivalent capability with the available key. |
 
 ---
 
 ## Sources
 
 - [Minor versions of our API — Intuit Developer](https://developer.intuit.com/app/developer/qbo/docs/learn/explore-the-quickbooks-online-api/minor-versions)
-- [Changes to our Accounting API (minor version 75 / deprecation) — Intuit Developer Community](https://blogs.a.intuit.com/2025/01/21/changes-to-our-accounting-api-that-may-impact-your-application/)
+- [Changes to our Accounting API (minor version 75 deprecation)](https://blogs.a.intuit.com/2025/01/21/changes-to-our-accounting-api-that-may-impact-your-application/)
 - [Important changes to refresh token policy — Intuit Developer](https://blogs.intuit.com/2025/11/12/important-changes-to-refresh-token-policy/)
 - [Set up OAuth 2.0 — Intuit Developer](https://developer.intuit.com/app/developer/qbo/docs/develop/authentication-and-authorization/oauth-2.0)
 - [OAuth 2.0 & authorization FAQ — Intuit Developer](https://developer.intuit.com/app/developer/qbo/docs/develop/authentication-and-authorization/faq)
