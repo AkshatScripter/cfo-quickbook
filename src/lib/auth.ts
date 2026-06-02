@@ -40,14 +40,20 @@ export async function getUser(): Promise<User | null> {
   if (!created) return null;
 
   if (created.role === "customer") {
-    await seedDemoCustomer(created.id, created.name);
-    // Re-fetch to pick up companyId + qbCustomerId written by seed
-    const [seeded] = await db
-      .select()
-      .from(cfoUsers)
-      .where(eq(cfoUsers.id, created.id))
-      .limit(1);
-    return seeded ?? created;
+    try {
+      await seedDemoCustomer(created.id, created.name);
+      // Re-fetch to pick up companyId + qbCustomerId written by seed
+      const [seeded] = await db
+        .select()
+        .from(cfoUsers)
+        .where(eq(cfoUsers.id, created.id))
+        .limit(1);
+      return seeded ?? created;
+    } catch (err) {
+      // Seed failure must not block login — user row already exists
+      console.error("[demo-seed] seedDemoCustomer failed:", err);
+      return created;
+    }
   }
 
   return created;
