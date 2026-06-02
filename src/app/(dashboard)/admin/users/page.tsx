@@ -22,8 +22,15 @@ interface QBCustomerOption {
   displayName: string | null;
 }
 
+interface CompanyOption {
+  id: string;
+  name: string | null;
+  email: string;
+}
+
 export default function AdminUsers() {
   const [users, setUsers] = useState<UserRow[]>([]);
+  const [companies, setCompanies] = useState<CompanyOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [toggling, setToggling] = useState<string | null>(null);
@@ -32,22 +39,23 @@ export default function AdminUsers() {
   const [qbMap, setQbMap] = useState<Record<string, QBCustomerOption[]>>({});
 
   useEffect(() => {
-    fetch("/api/admin/users")
-      .then(r => r.json())
-      .then(d => {
-        const allUsers: UserRow[] = d?.users ?? [];
+    Promise.all([
+      fetch("/api/admin/users").then(r => r.json()),
+      fetch("/api/admin/companies").then(r => r.json()),
+    ])
+      .then(([usersData, companiesData]) => {
+        const allUsers: UserRow[] = usersData?.users ?? [];
         setUsers(allUsers);
+        setCompanies(companiesData?.companies ?? []);
         // Pre-load QB customers for companies that already have assigned customers
         const assignedCompanyIds = [...new Set(
-          allUsers.filter(u => u.role === "customer" && u.companyId).map(u => u.companyId!)
+          allUsers.filter(u => u.companyId).map(u => u.companyId!)
         )];
         assignedCompanyIds.forEach(cid => loadQbCustomers(cid));
       })
       .catch(console.error)
       .finally(() => setLoading(false));
   }, []);
-
-  const companyUsers = users.filter(u => u.role === "company");
 
   async function loadQbCustomers(companyId: string) {
     if (!companyId || qbMap[companyId]) return;
@@ -127,7 +135,7 @@ export default function AdminUsers() {
     }
   }
 
-  const customers = users.filter(u => u.role === "customer");
+  const customers = users;
   const filtered = customers.filter(u =>
     !search ||
     u.name?.toLowerCase().includes(search.toLowerCase()) ||
@@ -198,7 +206,7 @@ export default function AdminUsers() {
                         }}
                       >
                         <option value="">— not assigned —</option>
-                        {companyUsers.map(c => (
+                        {companies.map(c => (
                           <option key={c.id} value={c.id}>
                             {c.name ?? c.email}
                           </option>
