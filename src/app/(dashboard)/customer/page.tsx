@@ -19,6 +19,7 @@ interface CustomerInvoice {
 interface CustomerData {
   invoices: CustomerInvoice[];
   totalOwed: number;
+  notLinked?: boolean;
 }
 
 type Filter = "All" | "Open" | "Paid" | "Overdue";
@@ -42,6 +43,26 @@ export default function CustomerPortal() {
   const nextDue = invoices.find(i => i.status === "Open" || i.status === "Overdue");
 
   if (loading) return <div className="page"><PageLoader /></div>;
+
+  if (data?.notLinked) {
+    return (
+      <div className="page">
+        <div className="page-head">
+          <div>
+            <h1 className="page-title">Hi {user?.name?.split(" ")[0] ?? "there"},</h1>
+            <p className="page-sub">Here&apos;s your account overview.</p>
+          </div>
+        </div>
+        <div className="empty" style={{ marginTop: 40 }}>
+          <div className="h-title" style={{ marginBottom: 8 }}>Account not linked yet</div>
+          <p className="muted" style={{ maxWidth: 360, textAlign: "center" }}>
+            Your account hasn&apos;t been linked to a company yet.
+            Contact your account manager to get set up.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="page">
