@@ -6,10 +6,9 @@ import { z } from "zod";
 
 const bodySchema = z.object({
   companyId: z.string().uuid().nullable(),
-  qbCustomerId: z.string().nullable(),
 });
 
-// PATCH /api/customers/:id — super_admin assigns a portal customer to a company + QB customer
+// PATCH /api/customers/:id — super_admin assigns a portal customer to a company
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -36,7 +35,6 @@ export async function PATCH(
       .update(cfoUsers)
       .set({
         companyId: body.companyId,
-        qbCustomerId: body.qbCustomerId,
         updatedAt: new Date(),
       })
       .where(eq(cfoUsers.id, id))
