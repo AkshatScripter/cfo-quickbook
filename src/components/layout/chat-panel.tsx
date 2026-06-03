@@ -36,6 +36,56 @@ interface Message {
   meta: string;
 }
 
+interface HistoryEntry {
+  role: "user" | "assistant";
+  content: string;
+}
+
+// Renders **bold**, newlines, and bullet/numbered lists without a markdown library
+function MarkdownBubble({ text }: { text: string }) {
+  const lines = text.split("\n");
+
+  return (
+    <span>
+      {lines.map((line, li) => {
+        const trimmed = line.trimStart();
+
+        // Bullet list item: "- text" or "* text"
+        const bulletMatch = trimmed.match(/^[-*]\s+(.*)/);
+        // Numbered list item: "1. text"
+        const numberedMatch = trimmed.match(/^(\d+)\.\s+(.*)/);
+
+        const content = bulletMatch
+          ? bulletMatch[1]
+          : numberedMatch
+          ? numberedMatch[2]
+          : line;
+
+        const prefix = bulletMatch ? "• " : numberedMatch ? `${numberedMatch[1]}. ` : null;
+
+        return (
+          <span key={li} style={prefix ? { display: "block", paddingLeft: 4 } : undefined}>
+            {prefix && <span style={{ marginRight: 4 }}>{prefix}</span>}
+            {renderInline(content)}
+            {!prefix && li < lines.length - 1 && <br />}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+// Handles **bold** within a single line of text
+function renderInline(text: string) {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, i) => {
+    if (part.startsWith("**") && part.endsWith("**")) {
+      return <strong key={i}>{part.slice(2, -2)}</strong>;
+    }
+    return part;
+  });
+}
+
 function formatSync(iso: string | null | undefined): string {
   if (!iso) return "never";
   const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60_000);
@@ -44,21 +94,6 @@ function formatSync(iso: string | null | undefined): string {
   const hrs = Math.floor(mins / 60);
   if (hrs < 24)  return `${hrs}h ago`;
   return `${Math.floor(hrs / 24)}d ago`;
-}
-
-function pickResponse(text: string, role: string) {
-  const q = text.toLowerCase();
-  if (role === "customer") {
-    if (q.includes("owe") || q.includes("balance")) return { body: "You currently owe $12,400 across 1 unpaid invoice. INV-1042 (issued May 18) is due on Jun 17, 2026.", source: "Based on your invoice ledger from Acme Holdings", followups: ["See full invoice history", "Download INV-1042 as PDF", "Set up a payment reminder"] };
-    if (q.includes("due") || q.includes("when")) return { body: "Your next payment of $12,400 is due Jun 17, 2026 — that's in 20 days. No other invoices are scheduled within the next 90 days.", source: "Based on open invoices from Acme Holdings", followups: ["What's my payment history?", "Email me a reminder", "Download invoice"] };
-    return { body: "I can help with invoices, payment history, and amounts due. Try one of the suggestions below.", followups: ["What do I owe?", "When is my next payment?", "Show my paid invoices"] };
-  }
-  if (q.includes("revenue") || q.includes("sales") || q.includes("top customer")) return { body: "Revenue this month is $184,320 — that's +13.2% MoM and your best month in the trailing 6. Customer A drove 26% of MTD revenue ($48,200), with the top 4 customers accounting for 68% combined.", source: "Based on your Q2 P&L and invoice ledger", highlights: ["revenueMTD"], followups: ["Compare to same period last year", "Show me revenue by product", "Which customer grew fastest?"] };
-  if (q.includes("cash") || q.includes("runway") || q.includes("forecast")) return { body: "Projected cash in 90 days: $328,600 — down $84,300 from today. At your current burn ($38,500/mo) you have ~10.7 months of runway.", source: "Based on Cash Flow Statement + AR/AP aging", highlights: ["cashOnHand", "runway"], followups: ["What if we pause hiring?", "Show me upcoming large outflows", "Compare burn to last quarter"] };
-  if (q.includes("expense") || q.includes("spike") || q.includes("cost")) return { body: "Expenses are up 8% MoM, driven mostly by Software (+41% vs Q1). The single largest jump was a new annual SaaS contract booked in April.", source: "Based on Expenses by Category, last 6 months", followups: ["Why is software up so much?", "Show all expenses over $1,000", "Compare to industry benchmark"] };
-  if (q.includes("overdue") || q.includes("risk") || q.includes("late") || q.includes("dso") || q.includes("ar days")) return { body: "3 invoices are 30+ days overdue, totaling $14,860. Customer C is the largest at $6,200 (47 days late). Your DSO climbed from 28 to 32 days this quarter.", source: "Based on Accounts Receivable Aging", highlights: ["arDays"], followups: ["Send a reminder to Customer C", "Show DSO trend over the year", "Flag any payment patterns"] };
-  if (q.includes("margin") || q.includes("kpi") || q.includes("burn")) return { body: "Gross margin sits at 62% (+3.2 pts QoQ) and net margin at 18%. Burn rate is steady at $38,500/mo. AR days improved slightly to 32 from 35.", source: "Based on P&L + AR aging across last 3 quarters", highlights: ["runway", "arDays"], followups: ["What's driving margin improvement?", "Compare KPIs to last year", "Show category-level expense ratios"] };
-  return { body: "I can analyze your QuickBooks data — try asking about revenue, cash flow, expenses, margins, or specific customers.", followups: ["Summarize this month's P&L", "What's my biggest expense category?", "Which customer pays slowest?"] };
 }
 
 export function ChatPanel() {
@@ -72,6 +107,7 @@ export function ChatPanel() {
       : "I'm your CFO assistant, grounded in your live QuickBooks data. Ask about revenue, cash flow, expenses, margins — or tap a quick action.",
     meta: "Just now",
   }]);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [input, setInput] = useState("");
   const [typing, setTyping] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -80,20 +116,37 @@ export function ChatPanel() {
     if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
   }, [messages, typing]);
 
-  function send(text?: string) {
+  async function send(text?: string) {
     const t = (text ?? input).trim();
     if (!t) return;
     const userId = `u-${Date.now()}`;
     setMessages(m => [...m, { id: userId, kind: "user", body: t, meta: "Just now" }]);
     setInput("");
     setTyping(true);
-    setTimeout(() => {
-      const r = pickResponse(t, role);
+
+    try {
+      const res = await fetch("/api/ai/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: t, history }),
+      });
+
+      const data = await res.json();
+      const answer: string = res.ok
+        ? (data.answer ?? "Sorry, I received an empty response.")
+        : (data.error ?? "Something went wrong. Please try again.");
+
       const aiId = `ai-${Date.now()}`;
-      setMessages(m => [...m, { id: aiId, kind: "ai", body: r.body, source: r.source, followups: r.followups, highlights: r.highlights, meta: "Just now" }]);
+      setMessages(m => [...m, { id: aiId, kind: "ai", body: answer, meta: "Just now" }]);
+      if (res.ok) {
+        setHistory(h => [...h, { role: "user", content: t }, { role: "assistant", content: answer }]);
+      }
+    } catch {
+      const aiId = `ai-err-${Date.now()}`;
+      setMessages(m => [...m, { id: aiId, kind: "ai", body: "Network error — please check your connection and try again.", meta: "Just now" }]);
+    } finally {
       setTyping(false);
-      if (r.highlights) r.highlights.forEach((h, idx) => setTimeout(() => flashHighlight(h), idx * 700));
-    }, 900);
+    }
   }
 
   useEffect(() => {
@@ -132,7 +185,7 @@ export function ChatPanel() {
             <div className="msg ai">
               <div className="who">C</div>
               <div>
-                <div className="bubble">{messages[0].body}</div>
+                <div className="bubble"><MarkdownBubble text={messages[0].body} /></div>
                 <div className="meta">{messages[0].meta}</div>
               </div>
             </div>
@@ -158,7 +211,7 @@ export function ChatPanel() {
           <div key={m.id || i} className={`msg ${m.kind}`}>
             <div className="who">{m.kind === "ai" ? "C" : "Y"}</div>
             <div>
-              <div className="bubble">{m.body}</div>
+              <div className="bubble"><MarkdownBubble text={m.body} /></div>
               {m.source && <div className="source"><I.Sparkle size={11} /> {m.source}</div>}
               {m.kind === "ai" && i > 0 && (
                 <div style={{ marginTop: 6 }}>

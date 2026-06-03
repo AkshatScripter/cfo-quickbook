@@ -52,6 +52,24 @@ interface Invoice {
   status: string;
 }
 
+interface Briefing {
+  text: string;
+  highlights: string[];
+  suggestions: string[];
+  generatedAt: string;
+}
+
+function highlightText(text: string, highlights: string[]): React.ReactNode[] {
+  if (!highlights.length) return [text];
+  const sorted = [...highlights].sort((a, b) => b.length - a.length);
+  const pattern = sorted.map(h => h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const regex = new RegExp(`(${pattern})`, "g");
+  const parts = text.split(regex);
+  return parts.map((part, i) =>
+    highlights.includes(part) ? <span key={i} className="hl">{part}</span> : part
+  );
+}
+
 function pct(value: number, prev: number) {
   if (!prev) return null;
   const diff = ((value - prev) / prev) * 100;
@@ -72,6 +90,8 @@ export default function CompanyDashboard() {
   const [risk, setRisk] = useState<RiskData | null>(null);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
+  const [briefing, setBriefing] = useState<Briefing | null>(null);
+  const [briefingLoading, setBriefingLoading] = useState(true);
 
   useEffect(() => {
     Promise.all([
@@ -88,6 +108,12 @@ export default function CompanyDashboard() {
       setInvoices(inv?.invoices ?? []);
     }).catch(console.error)
       .finally(() => setLoading(false));
+
+    fetch("/api/ai/briefing")
+      .then(r => r.json())
+      .then(d => { if (!d.notLinked && !d.error) setBriefing(d); })
+      .catch(console.error)
+      .finally(() => setBriefingLoading(false));
   }, []);
 
   if (loading) return <div className="page"><PageLoader label="Loading dashboard…" /></div>;
@@ -163,6 +189,53 @@ export default function CompanyDashboard() {
               <button type="button" className="pin-close" onClick={() => unpinInsight(p.id)}><I.X size={11} /></button>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* CFO Briefing */}
+      {(briefing || briefingLoading) && (
+        <div className="briefing">
+          <div className="briefing-deco" />
+          <div style={{ position: "relative", zIndex: 1 }}>
+            <div className="briefing-eyebrow">
+              <span className="pulse" />
+              CFO Briefing
+              <span style={{ opacity: 0.5 }}>·</span>
+              {new Date().toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" }).toUpperCase()}
+            </div>
+
+            {briefingLoading ? (
+              <div className="briefing-body" style={{ opacity: 0.35, fontSize: 20 }}>
+                Generating your morning briefing…
+              </div>
+            ) : briefing ? (
+              <>
+                <div className="briefing-body">
+                  {highlightText(briefing.text, briefing.highlights)}
+                </div>
+                <div className="briefing-foot">
+                  {briefing.suggestions.map(s => (
+                    <button
+                      key={s}
+                      className="suggestion"
+                      onClick={() => askAI(s)}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+                <div className="briefing-meta">
+                  Generated {new Date(briefing.generatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} · grounded in QuickBooks · gpt-4o-mini
+                </div>
+              </>
+            ) : null}
+          </div>
+
+          <div className="briefing-side">
+            <span className="badge b-accent">
+              <I.Sparkle size={11} /> AI · CFO
+            </span>
+          </div>
         </div>
       )}
 

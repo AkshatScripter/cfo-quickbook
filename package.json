@@ -13,8 +13,10 @@
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^3.0.67",
     "@supabase/ssr": "^0.10.3",
     "@supabase/supabase-js": "^2.106.2",
+    "ai": "^6.0.195",
     "drizzle-orm": "^0.45.2",
     "intuit-oauth": "^4.2.3",
     "next": "16.2.6",

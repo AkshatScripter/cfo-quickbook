@@ -6,6 +6,34 @@ import { StatusPill } from "@/components/ui/status-pill";
 import { PageLoader } from "@/components/ui/spinner";
 import { useApp } from "@/lib/app-context";
 
+interface Briefing {
+  text: string;
+  highlights: string[];
+  suggestions: string[];
+  generatedAt: string;
+}
+
+function highlightText(text: string, highlights: string[]): React.ReactNode[] {
+  if (!highlights.length) return [text];
+
+  // Build a regex that matches any of the highlight phrases (longest first to avoid partial matches)
+  const sorted = [...highlights].sort((a, b) => b.length - a.length);
+  const pattern = sorted.map(h => h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const regex = new RegExp(`(${pattern})`, "g");
+
+  const parts = text.split(regex);
+  return parts.map((part, i) =>
+    highlights.includes(part)
+      ? <span key={i} className="hl">{part}</span>
+      : part
+  );
+}
+
+function formatGenerated(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
 interface CustomerInvoice {
   id: string;
   invoiceNumber: string | null;
@@ -25,10 +53,12 @@ interface CustomerData {
 type Filter = "All" | "Open" | "Paid" | "Overdue";
 
 export default function CustomerPortal() {
-  const { user, openChat } = useApp();
+  const { user, openChat, askAI } = useApp();
   const [data, setData] = useState<CustomerData | null>(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<Filter>("All");
+  const [briefing, setBriefing] = useState<Briefing | null>(null);
+  const [briefingLoading, setBriefingLoading] = useState(true);
 
   useEffect(() => {
     fetch("/api/customer/invoices")
@@ -36,6 +66,12 @@ export default function CustomerPortal() {
       .then(setData)
       .catch(console.error)
       .finally(() => setLoading(false));
+
+    fetch("/api/ai/briefing")
+      .then(r => r.json())
+      .then(d => { if (!d.notLinked && !d.error) setBriefing(d); })
+      .catch(console.error)
+      .finally(() => setBriefingLoading(false));
   }, []);
 
   const invoices = data?.invoices ?? [];
@@ -78,6 +114,53 @@ export default function CustomerPortal() {
           </button>
         </div>
       </div>
+
+      {/* AI Briefing */}
+      {(briefing || briefingLoading) && (
+        <div className="briefing">
+          <div className="briefing-deco" />
+          <div style={{ position: "relative", zIndex: 1 }}>
+            <div className="briefing-eyebrow">
+              <span className="pulse" />
+              Account Briefing
+              <span style={{ opacity: 0.5 }}>·</span>
+              {new Date().toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" }).toUpperCase()}
+            </div>
+
+            {briefingLoading ? (
+              <div className="briefing-body" style={{ opacity: 0.35, fontSize: 20 }}>
+                Generating your account summary…
+              </div>
+            ) : briefing ? (
+              <>
+                <div className="briefing-body">
+                  {highlightText(briefing.text, briefing.highlights)}
+                </div>
+                <div className="briefing-foot">
+                  {briefing.suggestions.map(s => (
+                    <button
+                      key={s}
+                      className="suggestion"
+                      onClick={() => { openChat(); askAI(s); }}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+                <div className="briefing-meta">
+                  Generated {formatGenerated(briefing.generatedAt)} · grounded in QuickBooks · gpt-4o-mini
+                </div>
+              </>
+            ) : null}
+          </div>
+
+          <div className="briefing-side">
+            <span className="badge b-accent">
+              <I.Sparkle size={11} /> AI · CFO
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Outstanding balance hero */}
       <div className="card" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "28px 32px", marginBottom: 20 }}>
