@@ -1,29 +1,52 @@
 import { requireRole } from "@/lib/auth";
 import { db } from "@/db";
-import { cfoUsers } from "@/db/schema";
-import { eq } from "drizzle-orm";
-import { createAdminClient } from "@/lib/supabase/server";
+import { cfoUsers, cfoQbCompanies, cfoQbCustomers } from "@/db/schema";
+import { eq, isNotNull } from "drizzle-orm";
 
-// GET /api/admin/users — all users
+// GET /api/admin/users — all users enriched with role-specific table data
 export async function GET() {
   try {
     await requireRole("super_admin");
 
-    const users = await db
-      .select({
-        id: cfoUsers.id,
-        email: cfoUsers.email,
-        name: cfoUsers.name,
-        role: cfoUsers.role,
-        companyId: cfoUsers.companyId,
+    const [users, companies, customers] = await Promise.all([
+      db.select({
+        id:          cfoUsers.id,
+        email:       cfoUsers.email,
+        name:        cfoUsers.name,
+        role:        cfoUsers.role,
+        companyId:   cfoUsers.companyId,
         qbCustomerId: cfoUsers.qbCustomerId,
-        isActive: cfoUsers.isActive,
-        createdAt: cfoUsers.createdAt,
-      })
-      .from(cfoUsers)
-      .orderBy(cfoUsers.createdAt);
+        isActive:    cfoUsers.isActive,
+        createdAt:   cfoUsers.createdAt,
+      }).from(cfoUsers).orderBy(cfoUsers.createdAt),
 
-    return Response.json({ users });
+      // Company details from cfo_qb_companies
+      db.select({
+        userId:      cfoQbCompanies.userId,
+        companyName: cfoQbCompanies.companyName,
+        industry:    cfoQbCompanies.industry,
+        phone:       cfoQbCompanies.phone,
+      }).from(cfoQbCompanies),
+
+      // Platform-created customers (userId set) from cfo_qb_customers
+      db.select({
+        userId:      cfoQbCustomers.userId,
+        displayName: cfoQbCustomers.displayName,
+        balance:     cfoQbCustomers.balance,
+        phone:       cfoQbCustomers.phone,
+      }).from(cfoQbCustomers).where(isNotNull(cfoQbCustomers.userId)),
+    ]);
+
+    const companyMap = new Map(companies.map(c => [c.userId, c]));
+    const customerMap = new Map(customers.map(c => [c.userId!, c]));
+
+    const enriched = users.map(u => ({
+      ...u,
+      ...(u.role === "company"  ? companyMap.get(u.id)  ?? {} : {}),
+      ...(u.role === "customer" ? customerMap.get(u.id) ?? {} : {}),
+    }));
+
+    return Response.json({ users: enriched });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Server error";
     return Response.json({ error: msg }, { status: 500 });

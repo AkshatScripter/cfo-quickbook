@@ -1,36 +1,44 @@
 import { requireRole } from "@/lib/auth";
 import { db } from "@/db";
-import { cfoUsers, cfoQbConnections } from "@/db/schema";
+import { cfoUsers, cfoQbCompanies, cfoQbConnections } from "@/db/schema";
 import { eq } from "drizzle-orm";
 
-// GET /api/admin/companies — all company users with their QB connection status
+// GET /api/admin/companies — companies from cfo_qb_companies joined with auth + QB connection
 export async function GET() {
   try {
     await requireRole("super_admin");
 
-    const companies = await db
-      .select({
-        id: cfoUsers.id,
-        email: cfoUsers.email,
-        name: cfoUsers.name,
-        isActive: cfoUsers.isActive,
-        createdAt: cfoUsers.createdAt,
-      })
-      .from(cfoUsers)
-      .where(eq(cfoUsers.role, "company"));
+    const [companies, connections] = await Promise.all([
+      db
+        .select({
+          id:          cfoQbCompanies.id,
+          userId:      cfoQbCompanies.userId,
+          companyName: cfoQbCompanies.companyName,
+          email:       cfoQbCompanies.email,
+          phone:       cfoQbCompanies.phone,
+          industry:    cfoQbCompanies.industry,
+          isActive:    cfoQbCompanies.isActive,
+          createdAt:   cfoQbCompanies.createdAt,
+          // Auth user fields
+          userName:    cfoUsers.name,
+          userEmail:   cfoUsers.email,
+        })
+        .from(cfoQbCompanies)
+        .leftJoin(cfoUsers, eq(cfoUsers.id, cfoQbCompanies.userId)),
 
-    // Attach QB connection info
-    const connections = await db.select().from(cfoQbConnections);
-    const connMap = new Map(connections.map((c) => [c.userId, c]));
+      db.select().from(cfoQbConnections),
+    ]);
 
-    const result = companies.map((c) => {
-      const conn = connMap.get(c.id);
+    const connMap = new Map(connections.map(c => [c.userId, c]));
+
+    const result = companies.map(c => {
+      const conn = connMap.get(c.userId);
       return {
         ...c,
         qbConnected: conn?.isActive ?? false,
-        realmId: conn?.realmId ?? null,
-        lastSync: conn?.lastSyncAt ?? null,
-        syncError: conn?.syncError ?? null,
+        realmId:     conn?.realmId ?? null,
+        lastSync:    conn?.lastSyncAt ?? null,
+        syncError:   conn?.syncError ?? null,
       };
     });
 
