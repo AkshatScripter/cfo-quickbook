@@ -31,8 +31,6 @@ interface Message {
   kind: "ai" | "user";
   body: string;
   source?: string;
-  followups?: string[];
-  highlights?: string[];
   meta: string;
 }
 
@@ -46,24 +44,10 @@ function formatSync(iso: string | null | undefined): string {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
-function pickResponse(text: string, role: string) {
-  const q = text.toLowerCase();
-  if (role === "customer") {
-    if (q.includes("owe") || q.includes("balance")) return { body: "You currently owe $12,400 across 1 unpaid invoice. INV-1042 (issued May 18) is due on Jun 17, 2026.", source: "Based on your invoice ledger from Acme Holdings", followups: ["See full invoice history", "Download INV-1042 as PDF", "Set up a payment reminder"] };
-    if (q.includes("due") || q.includes("when")) return { body: "Your next payment of $12,400 is due Jun 17, 2026 — that's in 20 days. No other invoices are scheduled within the next 90 days.", source: "Based on open invoices from Acme Holdings", followups: ["What's my payment history?", "Email me a reminder", "Download invoice"] };
-    return { body: "I can help with invoices, payment history, and amounts due. Try one of the suggestions below.", followups: ["What do I owe?", "When is my next payment?", "Show my paid invoices"] };
-  }
-  if (q.includes("revenue") || q.includes("sales") || q.includes("top customer")) return { body: "Revenue this month is $184,320 — that's +13.2% MoM and your best month in the trailing 6. Customer A drove 26% of MTD revenue ($48,200), with the top 4 customers accounting for 68% combined.", source: "Based on your Q2 P&L and invoice ledger", highlights: ["revenueMTD"], followups: ["Compare to same period last year", "Show me revenue by product", "Which customer grew fastest?"] };
-  if (q.includes("cash") || q.includes("runway") || q.includes("forecast")) return { body: "Projected cash in 90 days: $328,600 — down $84,300 from today. At your current burn ($38,500/mo) you have ~10.7 months of runway.", source: "Based on Cash Flow Statement + AR/AP aging", highlights: ["cashOnHand", "runway"], followups: ["What if we pause hiring?", "Show me upcoming large outflows", "Compare burn to last quarter"] };
-  if (q.includes("expense") || q.includes("spike") || q.includes("cost")) return { body: "Expenses are up 8% MoM, driven mostly by Software (+41% vs Q1). The single largest jump was a new annual SaaS contract booked in April.", source: "Based on Expenses by Category, last 6 months", followups: ["Why is software up so much?", "Show all expenses over $1,000", "Compare to industry benchmark"] };
-  if (q.includes("overdue") || q.includes("risk") || q.includes("late") || q.includes("dso") || q.includes("ar days")) return { body: "3 invoices are 30+ days overdue, totaling $14,860. Customer C is the largest at $6,200 (47 days late). Your DSO climbed from 28 to 32 days this quarter.", source: "Based on Accounts Receivable Aging", highlights: ["arDays"], followups: ["Send a reminder to Customer C", "Show DSO trend over the year", "Flag any payment patterns"] };
-  if (q.includes("margin") || q.includes("kpi") || q.includes("burn")) return { body: "Gross margin sits at 62% (+3.2 pts QoQ) and net margin at 18%. Burn rate is steady at $38,500/mo. AR days improved slightly to 32 from 35.", source: "Based on P&L + AR aging across last 3 quarters", highlights: ["runway", "arDays"], followups: ["What's driving margin improvement?", "Compare KPIs to last year", "Show category-level expense ratios"] };
-  return { body: "I can analyze your QuickBooks data — try asking about revenue, cash flow, expenses, margins, or specific customers.", followups: ["Summarize this month's P&L", "What's my biggest expense category?", "Which customer pays slowest?"] };
-}
-
 export function ChatPanel() {
-  const { user, role, navigate, closeChat, flashHighlight, pinInsight, pinned, pendingPrompt, clearPendingPrompt } = useApp();
+  const { user, role, navigate, closeChat, pinInsight, pinned, pendingPrompt, clearPendingPrompt } = useApp();
 
+  const sessionId = useRef(crypto.randomUUID());
   const [messages, setMessages] = useState<Message[]>(() => [{
     id: "welcome",
     kind: "ai",
@@ -73,32 +57,86 @@ export function ChatPanel() {
     meta: "Just now",
   }]);
   const [input, setInput] = useState("");
-  const [typing, setTyping] = useState(false);
+  const [streamingBody, setStreamingBody] = useState<string | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
 
   useEffect(() => {
     if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
-  }, [messages, typing]);
+  }, [messages, streamingBody]);
 
-  function send(text?: string) {
+  async function send(text?: string) {
     const t = (text ?? input).trim();
-    if (!t) return;
-    const userId = `u-${Date.now()}`;
-    setMessages(m => [...m, { id: userId, kind: "user", body: t, meta: "Just now" }]);
+    if (!t || streamingBody !== null) return;
+
+    const userMsg: Message = { id: `u-${Date.now()}`, kind: "user", body: t, meta: "Just now" };
+    const nextMessages = [...messagesRef.current, userMsg];
+    setMessages(nextMessages);
     setInput("");
-    setTyping(true);
-    setTimeout(() => {
-      const r = pickResponse(t, role);
-      const aiId = `ai-${Date.now()}`;
-      setMessages(m => [...m, { id: aiId, kind: "ai", body: r.body, source: r.source, followups: r.followups, highlights: r.highlights, meta: "Just now" }]);
-      setTyping(false);
-      if (r.highlights) r.highlights.forEach((h, idx) => setTimeout(() => flashHighlight(h), idx * 700));
-    }, 900);
+    setStreamingBody("");
+
+    const apiMessages = nextMessages
+      .filter(m => m.id !== "welcome")
+      .map(m => ({ role: m.kind === "ai" ? "assistant" : "user", content: m.body }));
+
+    try {
+      const res = await fetch("/api/ai/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: apiMessages, sessionId: sessionId.current }),
+      });
+
+      if (!res.ok || !res.body) {
+        const err = await res.json().catch(() => ({ error: "Request failed" }));
+        throw new Error(err.error ?? "Request failed");
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let accumulated = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split("\n");
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const payload = line.slice(6).trim();
+          if (payload === "[DONE]") break;
+          try {
+            const token = JSON.parse(payload) as string;
+            accumulated += token;
+            setStreamingBody(accumulated);
+          } catch { /* ignore malformed chunk */ }
+        }
+      }
+
+      const aiMsg: Message = {
+        id: `ai-${Date.now()}`,
+        kind: "ai",
+        body: accumulated || "Sorry, I couldn't generate a response.",
+        meta: "Just now",
+      };
+      setMessages(m => [...m, aiMsg]);
+    } catch (err) {
+      const errMsg: Message = {
+        id: `err-${Date.now()}`,
+        kind: "ai",
+        body: err instanceof Error ? `Error: ${err.message}` : "Something went wrong. Please try again.",
+        meta: "Just now",
+      };
+      setMessages(m => [...m, errMsg]);
+    } finally {
+      setStreamingBody(null);
+    }
   }
 
   useEffect(() => {
     if (!pendingPrompt) return;
-    if (pendingPrompt.highlight) flashHighlight(pendingPrompt.highlight);
     send(pendingPrompt.text);
     clearPendingPrompt();
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -118,16 +156,16 @@ export function ChatPanel() {
         <div className="chat-title">
           <span className="mark">C</span>
           <span className="t">CFO Assistant</span>
-          <span className="sub">claude-sonnet-4</span>
+          <span className="sub">llama-3.3-70b</span>
         </div>
         <div className="row gap-2" style={{ marginLeft: "auto" }}>
-          <button className="btn btn-ghost btn-sm" title="New conversation"><I.Plus size={14} /></button>
+          <button className="btn btn-ghost btn-sm" title="New conversation" onClick={() => { setMessages([{ id: "welcome", kind: "ai", body: messages[0].body, meta: "Just now" }]); sessionId.current = crypto.randomUUID(); }}><I.Plus size={14} /></button>
           <button className="btn btn-ghost btn-sm" title="Close" onClick={closeChat}><I.X size={14} /></button>
         </div>
       </div>
 
       <div className="chat-body scroll" ref={bodyRef}>
-        {messages.length === 1 && (
+        {messages.length === 1 && streamingBody === null && (
           <div style={{ paddingBottom: 4 }}>
             <div className="msg ai">
               <div className="who">C</div>
@@ -171,23 +209,20 @@ export function ChatPanel() {
                   </button>
                 </div>
               )}
-              {m.followups && (
-                <div style={{ marginTop: 4 }}>
-                  {m.followups.map(f => (
-                    <button key={f} className="suggestion" onClick={() => send(f)}>{f}</button>
-                  ))}
-                </div>
-              )}
               <div className="meta">{m.meta}</div>
             </div>
           </div>
         ))}
 
-        {typing && (
+        {streamingBody !== null && (
           <div className="msg ai">
             <div className="who">C</div>
             <div>
-              <div className="bubble"><span className="typing"><span /><span /><span /></span></div>
+              <div className="bubble">
+                {streamingBody === ""
+                  ? <span className="typing"><span /><span /><span /></span>
+                  : streamingBody}
+              </div>
             </div>
           </div>
         )}
@@ -201,11 +236,12 @@ export function ChatPanel() {
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
             rows={1}
+            disabled={streamingBody !== null}
           />
           <div className="composer-tools">
             <button className="btn btn-ghost btn-sm" title="Attach"><I.Attach size={14} /></button>
             <button className="btn btn-ghost btn-sm" title="Suggestions"><I.Sparkle size={14} /></button>
-            <button className="composer-send" onClick={() => send()} disabled={!input.trim()} title="Send (↵)">
+            <button className="composer-send" onClick={() => send()} disabled={!input.trim() || streamingBody !== null} title="Send (↵)">
               <I.Send size={13} />
             </button>
           </div>
