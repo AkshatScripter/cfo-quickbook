@@ -3,7 +3,8 @@ import { db } from "@/db";
 import { cfoUsers, cfoQbCompanies, cfoQbConnections } from "@/db/schema";
 import { eq } from "drizzle-orm";
 
-// GET /api/admin/companies — companies from cfo_qb_companies joined with auth + QB connection
+// GET /api/admin/companies — all company users with QB connection status
+// Primary table is cfo_users so existing companies without a cfo_qb_companies row still appear
 export async function GET() {
   try {
     await requireRole("super_admin");
@@ -11,20 +12,19 @@ export async function GET() {
     const [companies, connections] = await Promise.all([
       db
         .select({
-          id:          cfoQbCompanies.id,
-          userId:      cfoQbCompanies.userId,
-          companyName: cfoQbCompanies.companyName,
-          email:       cfoQbCompanies.email,
+          id:          cfoUsers.id,
+          // Company name: prefer cfo_qb_companies.companyName, fall back to cfo_users.name
+          name:        cfoQbCompanies.companyName,
+          userName:    cfoUsers.name,
+          email:       cfoUsers.email,
           phone:       cfoQbCompanies.phone,
           industry:    cfoQbCompanies.industry,
-          isActive:    cfoQbCompanies.isActive,
-          createdAt:   cfoQbCompanies.createdAt,
-          // Auth user fields
-          userName:    cfoUsers.name,
-          userEmail:   cfoUsers.email,
+          isActive:    cfoUsers.isActive,
+          createdAt:   cfoUsers.createdAt,
         })
-        .from(cfoQbCompanies)
-        .leftJoin(cfoUsers, eq(cfoUsers.id, cfoQbCompanies.userId)),
+        .from(cfoUsers)
+        .leftJoin(cfoQbCompanies, eq(cfoQbCompanies.userId, cfoUsers.id))
+        .where(eq(cfoUsers.role, "company")),
 
       db.select().from(cfoQbConnections),
     ]);
@@ -32,9 +32,11 @@ export async function GET() {
     const connMap = new Map(connections.map(c => [c.userId, c]));
 
     const result = companies.map(c => {
-      const conn = connMap.get(c.userId);
+      const conn = connMap.get(c.id);
       return {
         ...c,
+        // Use companyName if set, otherwise fall back to the user's own name
+        name:        c.name ?? c.userName ?? null,
         qbConnected: conn?.isActive ?? false,
         realmId:     conn?.realmId ?? null,
         lastSync:    conn?.lastSyncAt ?? null,
