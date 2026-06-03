@@ -245,6 +245,18 @@ export const cfoApiErrors = pgTable("cfo_api_errors", {
   happenedAt: timestamp("happened_at").notNull().defaultNow(),
 });
 
+// ─── cfo_chat_history ─────────────────────────────────────────────────────────
+// Persisted AI chat turns — one row per message (user or assistant)
+
+export const cfoChatHistory = pgTable("cfo_chat_history", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull(),
+  sessionId: uuid("session_id").notNull(),
+  role: text("role").notNull(), // "user" | "assistant"
+  content: text("content").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
 // ─── Type exports ─────────────────────────────────────────────────────────────
 // Inferred TypeScript types for inserts and selects
 
@@ -273,3 +285,6 @@ export type CalculatedReport = typeof cfoCalculatedReports.$inferSelect;
 export type NewCalculatedReport = typeof cfoCalculatedReports.$inferInsert;
 
 export type ActivityLog = typeof cfoActivityLogs.$inferSelect;
+
+export type ChatHistory = typeof cfoChatHistory.$inferSelect;
+export type NewChatHistory = typeof cfoChatHistory.$inferInsert;
