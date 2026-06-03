@@ -2,6 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { db } from "@/db";
 import { cfoUsers, cfoQbCustomers, cfoQbCompanies } from "@/db/schema";
+import { seedDemoCustomer } from "@/lib/demo-seed";
 
 const bodySchema = z.object({
   email: z.email(),
@@ -52,6 +53,8 @@ export async function POST(request: Request) {
         email,
         isActive: true,
       });
+      // Auto-assign to demo company + seed demo invoices (requires DEMO_COMPANY_ID in .env)
+      try { await seedDemoCustomer(userId, name); } catch { /* non-blocking */ }
     } else {
       // company
       await db.insert(cfoQbCompanies).values({
