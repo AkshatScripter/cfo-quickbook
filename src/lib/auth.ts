@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { cfoUsers } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import type { User } from "@/db/schema";
+import { seedDemoCustomer } from "@/lib/demo-seed";
 
 // Get the current user's profile from cfo_users.
 // If the row doesn't exist yet (first login), create it automatically.
@@ -20,7 +21,17 @@ export async function getUser(): Promise<User | null> {
     .where(eq(cfoUsers.id, user.id))
     .limit(1);
 
-  if (profile) return profile;
+  if (profile) {
+    // Backfill: seed demo data for existing customers who signed up before the auto-seed was added
+    if (profile.role === "customer" && !profile.companyId) {
+      try {
+        await seedDemoCustomer(profile.id, profile.name);
+        const [seeded] = await db.select().from(cfoUsers).where(eq(cfoUsers.id, profile.id)).limit(1);
+        return seeded ?? profile;
+      } catch { /* non-blocking */ }
+    }
+    return profile;
+  }
 
   // First login — create the cfo_users row
   const role = resolveRole(user.email, user.user_metadata?.role);
