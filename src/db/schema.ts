@@ -175,23 +175,43 @@ export const cfoQbAccounts = pgTable("cfo_qb_accounts", {
 ]);
 
 // ─── cfo_qb_customers ─────────────────────────────────────────────────────────
-// Customers synced from QB
+// Customers — both QB-synced (realmId+qbId set) and platform-created (userId set, QB fields null)
 
 export const cfoQbCustomers = pgTable("cfo_qb_customers", {
   id: uuid("id").primaryKey().defaultRandom(),
-  realmId: text("realm_id").notNull(),
-  qbId: text("qb_id").notNull(),
+  // Nullable for platform-created customers (QB sync populates these)
+  realmId: text("realm_id"),
+  qbId: text("qb_id"),
+  // Set for platform-created customers, null for QB-only records
+  userId: uuid("user_id"),
   displayName: text("display_name"),
   email: text("email"),
   phone: text("phone"),
-  balance: numeric("balance", { precision: 12, scale: 2 }), // open balance owed by this customer
-  billAddr: jsonb("bill_addr"), // billing address object
+  balance: numeric("balance", { precision: 12, scale: 2 }),
+  billAddr: jsonb("bill_addr"),
   isActive: boolean("is_active").notNull().default(true),
   rawData: jsonb("raw_data"),
   syncedAt: timestamp("synced_at").notNull().defaultNow(),
 }, (t) => [
+  // NULL values are distinct in Postgres unique indexes — QB rows (non-null) deduplicate correctly
   uniqueIndex("cfo_qb_customers_realm_qb_idx").on(t.realmId, t.qbId),
 ]);
+
+// ─── cfo_qb_companies ─────────────────────────────────────────────────────────
+// Platform-created company users (QB connection is separate via cfo_qb_connections)
+
+export const cfoQbCompanies = pgTable("cfo_qb_companies", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull(), // FK → cfo_users.id
+  companyName: text("company_name"),
+  email: text("email"),
+  phone: text("phone"),
+  website: text("website"),
+  industry: text("industry"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
 
 // ─── cfo_calculated_reports ───────────────────────────────────────────────────
 // Cached results of calculated CFO reports (Revenue, Cash Flow, KPI, Risk)
@@ -280,6 +300,9 @@ export type NewQbExpense = typeof cfoQbExpenses.$inferInsert;
 
 export type QbCustomer = typeof cfoQbCustomers.$inferSelect;
 export type NewQbCustomer = typeof cfoQbCustomers.$inferInsert;
+
+export type QbCompany = typeof cfoQbCompanies.$inferSelect;
+export type NewQbCompany = typeof cfoQbCompanies.$inferInsert;
 
 export type CalculatedReport = typeof cfoCalculatedReports.$inferSelect;
 export type NewCalculatedReport = typeof cfoCalculatedReports.$inferInsert;
