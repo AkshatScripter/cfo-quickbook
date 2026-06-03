@@ -53,9 +53,9 @@ export default function CustomerPortal() {
             <p className="page-sub">Here&apos;s your account overview.</p>
           </div>
         </div>
-        <div className="empty" style={{ marginTop: 40 }}>
+        <div className="empty" style={{ marginTop: 40, display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" }}>
           <div className="h-title" style={{ marginBottom: 8 }}>Account not set up yet</div>
-          <p className="muted" style={{ maxWidth: 400, textAlign: "center" }}>
+          <p className="muted" style={{ maxWidth: 400 }}>
             Your account isn&apos;t fully set up yet. Contact your account manager —
             they need to assign you to a company and ensure your name or email
             matches your QuickBooks record.
