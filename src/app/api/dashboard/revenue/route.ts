@@ -23,7 +23,7 @@ export async function GET() {
 
 async function getConn(userId: string) {
   const [c] = await db.select().from(cfoQbConnections)
-    .where(and(eq(cfoQbConnections.userId, userId), eq(cfoQbConnections.isActive, true))).limit(1);
+    .where(eq(cfoQbConnections.userId, userId)).limit(1);
   return c ?? null;
 }
 

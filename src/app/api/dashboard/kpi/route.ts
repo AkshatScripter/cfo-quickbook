@@ -7,7 +7,7 @@ export async function GET() {
   try {
     const user = await requireRole("company");
     const [conn] = await db.select().from(cfoQbConnections)
-      .where(and(eq(cfoQbConnections.userId, user.id), eq(cfoQbConnections.isActive, true))).limit(1);
+      .where(eq(cfoQbConnections.userId, user.id)).limit(1);
     if (!conn) return Response.json({ error: "QuickBooks not connected" }, { status: 400 });
 
     const [report] = await db.select({ data: cfoCalculatedReports.data })
