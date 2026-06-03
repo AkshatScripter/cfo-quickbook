@@ -139,21 +139,6 @@ export default function CustomerPortal() {
         }
       </div>
 
-      {/* Ask CFO prompt */}
-      <div className="card" style={{ marginTop: 20, background: "var(--fg)", color: "#FAFAF9", border: "none", padding: 24 }}>
-        <div className="row gap-4">
-          <div style={{ width: 38, height: 38, borderRadius: 10, background: "var(--accent)", color: "var(--fg)", display: "grid", placeItems: "center", fontFamily: "var(--font-serif)", fontSize: 22, flexShrink: 0 }}>C</div>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontFamily: "var(--font-serif)", fontSize: 22, marginBottom: 4 }}>Quick question?</div>
-            <div style={{ color: "rgba(250,250,249,0.7)", fontSize: 13.5, marginBottom: 12 }}>Ask about what you owe, payment dates, or invoice history.</div>
-            <div className="row gap-2" style={{ flexWrap: "wrap" }}>
-              {["What do I owe right now?", "When is my next payment due?"].map(s => (
-                <button key={s} type="button" onClick={openChat} className="suggestion" style={{ background: "rgba(255,255,255,0.08)", borderColor: "rgba(255,255,255,0.14)", color: "#FAFAF9" }}>{s}</button>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }
