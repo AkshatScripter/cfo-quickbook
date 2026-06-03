@@ -3,8 +3,7 @@ import { db } from "@/db";
 import { cfoUsers, cfoQbCompanies, cfoQbConnections } from "@/db/schema";
 import { eq } from "drizzle-orm";
 
-// GET /api/admin/companies — all company users with QB connection status
-// Primary table is cfo_users so existing companies without a cfo_qb_companies row still appear
+// GET /api/admin/companies — all companies from cfo_qb_companies with QB connection status
 export async function GET() {
   try {
     await requireRole("super_admin");
@@ -12,19 +11,20 @@ export async function GET() {
     const [companies, connections] = await Promise.all([
       db
         .select({
-          id:          cfoUsers.id,
-          // Company name: prefer cfo_qb_companies.companyName, fall back to cfo_users.name
+          id:          cfoQbCompanies.id,
+          userId:      cfoQbCompanies.userId,
           name:        cfoQbCompanies.companyName,
-          userName:    cfoUsers.name,
-          email:       cfoUsers.email,
+          email:       cfoQbCompanies.email,
           phone:       cfoQbCompanies.phone,
           industry:    cfoQbCompanies.industry,
-          isActive:    cfoUsers.isActive,
-          createdAt:   cfoUsers.createdAt,
+          isActive:    cfoQbCompanies.isActive,
+          createdAt:   cfoQbCompanies.createdAt,
+          // Auth user fields
+          userName:    cfoUsers.name,
+          userEmail:   cfoUsers.email,
         })
-        .from(cfoUsers)
-        .leftJoin(cfoQbCompanies, eq(cfoQbCompanies.userId, cfoUsers.id))
-        .where(eq(cfoUsers.role, "company")),
+        .from(cfoQbCompanies)
+        .leftJoin(cfoUsers, eq(cfoUsers.id, cfoQbCompanies.userId)),
 
       db.select().from(cfoQbConnections),
     ]);
@@ -32,11 +32,11 @@ export async function GET() {
     const connMap = new Map(connections.map(c => [c.userId, c]));
 
     const result = companies.map(c => {
-      const conn = connMap.get(c.id);
+      const conn = connMap.get(c.userId);
       return {
         ...c,
-        // Use companyName if set, otherwise fall back to the user's own name
         name:        c.name ?? c.userName ?? null,
+        email:       c.email ?? c.userEmail ?? null,
         qbConnected: conn?.isActive ?? false,
         realmId:     conn?.realmId ?? null,
         lastSync:    conn?.lastSyncAt ?? null,
