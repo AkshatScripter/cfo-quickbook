@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
     const trimmed = messages.slice(-20);
 
     const groqStream = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
+      model: process.env.GROQ_MODEL ?? "llama-3.3-70b-versatile",
       messages: [{ role: "system", content: systemPrompt }, ...trimmed],
       stream: true,
       max_tokens: 1024,
