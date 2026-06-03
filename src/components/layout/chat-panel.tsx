@@ -47,15 +47,18 @@ function formatSync(iso: string | null | undefined): string {
 export function ChatPanel() {
   const { user, role, navigate, closeChat, pinInsight, pinned, pendingPrompt, clearPendingPrompt } = useApp();
 
-  const sessionId = useRef(crypto.randomUUID());
-  const [messages, setMessages] = useState<Message[]>(() => [{
+  const welcomeMsg: Message = {
     id: "welcome",
     kind: "ai",
     body: role === "customer"
       ? "Hi — I'm your account assistant. Ask me anything about your invoices, payments, or balance."
       : "I'm your CFO assistant, grounded in your live QuickBooks data. Ask about revenue, cash flow, expenses, margins — or tap a quick action.",
     meta: "Just now",
-  }]);
+  };
+
+  const sessionId = useRef(crypto.randomUUID());
+  const [messages, setMessages] = useState<Message[]>([welcomeMsg]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const [input, setInput] = useState("");
   const [streamingBody, setStreamingBody] = useState<string | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -64,6 +67,28 @@ export function ChatPanel() {
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => () => { abortRef.current?.abort(); }, []);
+
+  // Load previous chat history on mount
+  useEffect(() => {
+    async function loadHistory() {
+      try {
+        const res = await fetch("/api/ai/chat/history");
+        if (!res.ok) return;
+        const rows = await res.json() as { id: string; role: string; content: string; createdAt: string }[];
+        if (rows.length === 0) return;
+        const loaded: Message[] = rows.map(r => ({
+          id: r.id,
+          kind: r.role === "assistant" ? "ai" : "user",
+          body: r.content,
+          meta: new Date(r.createdAt).toLocaleString(),
+        }));
+        setMessages(loaded);
+      } catch { /* ignore */ } finally {
+        setHistoryLoaded(true);
+      }
+    }
+    loadHistory();
+  }, []);
 
   useEffect(() => {
     if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
@@ -166,13 +191,19 @@ export function ChatPanel() {
           <span className="sub">llama-3.3-70b</span>
         </div>
         <div className="row gap-2" style={{ marginLeft: "auto" }}>
-          <button className="btn btn-ghost btn-sm" title="New conversation" onClick={() => { setMessages([{ id: "welcome", kind: "ai", body: messages[0].body, meta: "Just now" }]); sessionId.current = crypto.randomUUID(); }}><I.Plus size={14} /></button>
+          <button className="btn btn-ghost btn-sm" title="New conversation" onClick={() => { setMessages([welcomeMsg]); sessionId.current = crypto.randomUUID(); }}><I.Plus size={14} /></button>
           <button className="btn btn-ghost btn-sm" title="Close" onClick={closeChat}><I.X size={14} /></button>
         </div>
       </div>
 
       <div className="chat-body scroll" ref={bodyRef}>
-        {messages.length === 1 && streamingBody === null && (
+        {!historyLoaded && (
+          <div className="msg ai">
+            <div className="who">C</div>
+            <div><div className="bubble"><span className="typing"><span /><span /><span /></span></div></div>
+          </div>
+        )}
+        {historyLoaded && messages.length === 1 && messages[0].id === "welcome" && streamingBody === null && (
           <div style={{ paddingBottom: 4 }}>
             <div className="msg ai">
               <div className="who">C</div>
@@ -199,7 +230,7 @@ export function ChatPanel() {
           </div>
         )}
 
-        {messages.length > 1 && messages.map((m, i) => (
+        {historyLoaded && !(messages.length === 1 && messages[0].id === "welcome") && messages.map((m, i) => (
           <div key={m.id || i} className={`msg ${m.kind}`}>
             <div className="who">{m.kind === "ai" ? "C" : "Y"}</div>
             <div>
