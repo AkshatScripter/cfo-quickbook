@@ -30,11 +30,11 @@ const NAV_BY_ROLE: Record<Role, NavItem[]> = {
   ],
   customer: [
     { section: "Your account" },
-    { id: "/customer", label: "Overview",       icon: "Home"     },
-    { id: "/customer", label: "Invoices",        icon: "Invoice"  },
-    { id: "/customer", label: "Payment history", icon: "Activity" },
+    { id: "/customer",                 label: "Overview",        icon: "Home"     },
+    { id: "/customer/invoices",        label: "Invoices",        icon: "Invoice"  },
+    { id: "/customer/payment-history", label: "Payment history", icon: "Activity" },
     { section: "Help" },
-    { id: "/customer", label: "Contact support", icon: "Mail"     },
+    { id: "/customer/support",         label: "Contact support", icon: "Mail"     },
   ],
   super_admin: [
     { section: "Platform" },

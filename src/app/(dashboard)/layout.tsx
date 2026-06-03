@@ -12,7 +12,7 @@ import { Spinner } from "@/components/ui/spinner";
 // Routes that belong to each role
 const COMPANY_PATHS = ["/dashboard", "/revenue", "/cashflow", "/kpi", "/risk", "/invoices", "/customers", "/settings"];
 const ADMIN_PATHS   = ["/admin"];
-const CUSTOMER_PATHS = ["/customer"];
+const CUSTOMER_PATHS = ["/customer", "/customer/invoices", "/customer/payment-history", "/customer/support"];
 
 function DashboardShell({ children }: Readonly<{ children: React.ReactNode }>) {
   const { chatOpen, openChat, role, isLoading } = useApp();
