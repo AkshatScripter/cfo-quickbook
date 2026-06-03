@@ -129,10 +129,11 @@ export function AppProvider({ children }: Readonly<{ children: React.ReactNode }
     const profile = await res.json() as AuthUser;
     setUser(profile);
 
-    if (profile.role === "super_admin") router.push("/admin");
-    else if (profile.role === "customer") router.push("/customer");
-    else router.push("/dashboard");
-  }, [supabase, router]);
+    // Full page load so middleware receives fresh cookies and session is recognised server-side
+    if (profile.role === "super_admin") window.location.href = "/admin";
+    else if (profile.role === "customer") window.location.href = "/customer";
+    else window.location.href = "/dashboard";
+  }, [supabase]);
 
   const logout = useCallback(async () => {
     await supabase.auth.signOut();
