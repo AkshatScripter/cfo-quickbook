@@ -23,7 +23,8 @@ export async function POST(req: NextRequest) {
     const body = await req.json() as { messages: ChatMessage[]; sessionId: string };
     const { messages, sessionId } = body;
 
-    if (!Array.isArray(messages) || !sessionId) {
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!Array.isArray(messages) || messages.length === 0 || !sessionId || !uuidRegex.test(sessionId)) {
       return Response.json({ error: "Invalid request body" }, { status: 400 });
     }
 
@@ -52,24 +53,29 @@ export async function POST(req: NextRequest) {
             }
           }
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          // Persist both turns before closing the stream
+          if (userMessage?.content && fullResponse) {
+            try {
+              await db.insert(cfoChatHistory).values([
+                { userId: user.id, sessionId, role: "user",      content: userMessage.content },
+                { userId: user.id, sessionId, role: "assistant", content: fullResponse },
+              ]);
+            } catch (dbErr) {
+              console.error("[ai/chat] Failed to persist chat history:", dbErr);
+            }
+          }
         } finally {
           controller.close();
-          // Persist both turns after stream completes
-          if (userMessage?.content && fullResponse) {
-            await db.insert(cfoChatHistory).values([
-              { userId: user.id, sessionId, role: "user",      content: userMessage.content },
-              { userId: user.id, sessionId, role: "assistant", content: fullResponse },
-            ]);
-          }
         }
       },
     });
 
     return new Response(readable, {
       headers: {
-        "Content-Type":  "text/event-stream",
+        "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
-        "Connection":    "keep-alive",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
       },
     });
   } catch (err) {
@@ -92,6 +98,7 @@ async function buildSystemPrompt(user: Awaited<ReturnType<typeof requireAuth>>):
 
 async function buildCFOPrompt(userId: string, role: string, today: string): Promise<string> {
   // For company: find their QB connection. For super_admin: get all active connections.
+  // super_admin sees up to 5 companies; context window capped to avoid token blowout
   const connections = role === "super_admin"
     ? await db.select().from(cfoQbConnections).where(eq(cfoQbConnections.isActive, true)).limit(5)
     : await db.select().from(cfoQbConnections)
