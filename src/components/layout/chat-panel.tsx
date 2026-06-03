@@ -61,6 +61,9 @@ export function ChatPanel() {
   const bodyRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => () => { abortRef.current?.abort(); }, []);
 
   useEffect(() => {
     if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
@@ -81,10 +84,12 @@ export function ChatPanel() {
       .map(m => ({ role: m.kind === "ai" ? "assistant" : "user", content: m.body }));
 
     try {
+      abortRef.current = new AbortController();
       const res = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: apiMessages, sessionId: sessionId.current }),
+        signal: abortRef.current.signal,
       });
 
       if (!res.ok || !res.body) {
@@ -103,16 +108,18 @@ export function ChatPanel() {
         const chunk = decoder.decode(value, { stream: true });
         const lines = chunk.split("\n");
 
+        let streamDone = false;
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
           const payload = line.slice(6).trim();
-          if (payload === "[DONE]") break;
+          if (payload === "[DONE]") { streamDone = true; break; }
           try {
             const token = JSON.parse(payload) as string;
             accumulated += token;
             setStreamingBody(accumulated);
           } catch { /* ignore malformed chunk */ }
         }
+        if (streamDone) break;
       }
 
       const aiMsg: Message = {
