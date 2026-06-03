@@ -1,7 +1,7 @@
 import { requireRole } from "@/lib/auth";
 import { db } from "@/db";
 import { cfoUsers, cfoQbCompanies, cfoQbCustomers } from "@/db/schema";
-import { eq, isNotNull } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 // GET /api/admin/users — all users enriched with role-specific table data
 export async function GET() {
@@ -10,31 +10,31 @@ export async function GET() {
 
     const [users, companies, customers] = await Promise.all([
       db.select({
-        id:          cfoUsers.id,
-        email:       cfoUsers.email,
-        name:        cfoUsers.name,
-        role:        cfoUsers.role,
-        companyId:   cfoUsers.companyId,
+        id: cfoUsers.id,
+        email: cfoUsers.email,
+        name: cfoUsers.name,
+        role: cfoUsers.role,
+        companyId: cfoUsers.companyId,
         qbCustomerId: cfoUsers.qbCustomerId,
-        isActive:    cfoUsers.isActive,
-        createdAt:   cfoUsers.createdAt,
+        isActive: cfoUsers.isActive,
+        createdAt: cfoUsers.createdAt,
       }).from(cfoUsers).orderBy(cfoUsers.createdAt),
 
       // Company details from cfo_qb_companies
       db.select({
-        userId:      cfoQbCompanies.userId,
+        userId: cfoQbCompanies.userId,
         companyName: cfoQbCompanies.companyName,
-        industry:    cfoQbCompanies.industry,
-        phone:       cfoQbCompanies.phone,
+        industry: cfoQbCompanies.industry,
+        phone: cfoQbCompanies.phone,
       }).from(cfoQbCompanies),
 
-      // Platform-created customers (userId set) from cfo_qb_customers
+      // All customers from cfo_qb_customers
       db.select({
-        userId:      cfoQbCustomers.userId,
+        userId: cfoQbCustomers.userId,
         displayName: cfoQbCustomers.displayName,
-        balance:     cfoQbCustomers.balance,
-        phone:       cfoQbCustomers.phone,
-      }).from(cfoQbCustomers).where(isNotNull(cfoQbCustomers.userId)),
+        balance: cfoQbCustomers.balance,
+        phone: cfoQbCustomers.phone,
+      }).from(cfoQbCustomers),
     ]);
 
     const companyMap = new Map(companies.map(c => [c.userId, c]));
@@ -42,7 +42,7 @@ export async function GET() {
 
     const enriched = users.map(u => ({
       ...u,
-      ...(u.role === "company"  ? companyMap.get(u.id)  ?? {} : {}),
+      ...(u.role === "company" ? companyMap.get(u.id) ?? {} : {}),
       ...(u.role === "customer" ? customerMap.get(u.id) ?? {} : {}),
     }));
 
